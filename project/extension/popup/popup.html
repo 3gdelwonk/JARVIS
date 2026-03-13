@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>IGA Milk Manager</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 320px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 13px;
+      color: #111827;
+      background: #fff;
+    }
+
+    /* ── Header ── */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px 9px;
+      border-bottom: 1px solid #1e40af;
+      background: #1d4ed8;
+      color: #fff;
+    }
+    .header-title { font-size: 14px; font-weight: 700; letter-spacing: -0.01em; }
+    .header-sub   { font-size: 11px; opacity: 0.8; margin-top: 1px; }
+
+    .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #6b7280;
+      flex-shrink: 0;
+      transition: background 0.2s;
+    }
+    .status-dot.connected { background: #4ade80; }
+
+    /* ── Section cards ── */
+    .section {
+      padding: 10px 14px;
+      border-bottom: 1px solid #f3f4f6;
+    }
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 5px;
+    }
+    .section-label {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #9ca3af;
+    }
+    .section-action {
+      font-size: 10px;
+      font-weight: 600;
+      color: #2563eb;
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 0;
+    }
+    .section-action:hover { text-decoration: underline; }
+    .section-action:disabled { color: #9ca3af; cursor: not-allowed; }
+
+    /* ── Delivery card ── */
+    .delivery-date {
+      font-size: 16px;
+      font-weight: 700;
+      color: #1d4ed8;
+      line-height: 1.2;
+    }
+    .delivery-sub {
+      font-size: 11px;
+      color: #6b7280;
+      margin-top: 2px;
+    }
+    .cutoff-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      margin-top: 5px;
+      padding: 2px 7px;
+      border-radius: 99px;
+      font-size: 11px;
+      font-weight: 600;
+      background: #fef3c7;
+      color: #92400e;
+    }
+    .cutoff-badge.urgent { background: #fee2e2; color: #991b1b; }
+    .cutoff-badge.ok     { background: #dcfce7; color: #166534; }
+    .cutoff-badge.passed { background: #f3f4f6; color: #9ca3af; }
+
+    /* Upcoming deliveries mini-list */
+    .upcoming-list {
+      margin-top: 7px;
+      border: 1px solid #f3f4f6;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .upcoming-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 4px 8px;
+      border-bottom: 1px solid #f9fafb;
+      font-size: 11px;
+    }
+    .upcoming-item:last-child { border-bottom: none; }
+    .upcoming-item-date  { color: #374151; font-weight: 500; }
+    .upcoming-item-cutoff { color: #9ca3af; }
+
+    .scraped-at {
+      margin-top: 5px;
+      font-size: 10px;
+      color: #d1d5db;
+    }
+
+    /* ── Order card ── */
+    .order-empty {
+      color: #9ca3af;
+      font-size: 12px;
+      font-style: italic;
+    }
+    .order-summary {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .order-count {
+      font-size: 22px;
+      font-weight: 800;
+      color: #1d4ed8;
+      line-height: 1;
+    }
+    .order-meta { font-size: 11px; color: #6b7280; line-height: 1.5; }
+    .order-date { color: #374151; font-weight: 500; }
+
+    .order-lines {
+      margin-top: 6px;
+      max-height: 110px;
+      overflow-y: auto;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+    }
+    .order-line {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 4px 8px;
+      border-bottom: 1px solid #f3f4f6;
+      font-size: 12px;
+    }
+    .order-line:last-child { border-bottom: none; }
+    .order-line-name { color: #374151; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+    .order-line-qty  { color: #1d4ed8; font-weight: 700; margin-left: 8px; flex-shrink: 0; }
+
+    /* ── Buttons ── */
+    .btn-row {
+      padding: 10px 14px;
+      display: flex;
+      gap: 8px;
+      border-bottom: 1px solid #f3f4f6;
+    }
+    .btn {
+      flex: 1;
+      padding: 7px 10px;
+      border-radius: 8px;
+      border: none;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary  { background: #2563eb; color: #fff; }
+    .btn-primary:not(:disabled):hover { background: #1d4ed8; }
+    .btn-outline  { background: #fff; color: #374151; border: 1px solid #d1d5db; }
+    .btn-outline:not(:disabled):hover { background: #f9fafb; }
+    .btn-danger   { background: #fff; color: #dc2626; border: 1px solid #fca5a5; }
+    .btn-danger:not(:disabled):hover  { background: #fef2f2; }
+
+    /* ── Footer ── */
+    .footer {
+      padding: 8px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .footer-link {
+      font-size: 11px;
+      color: #6b7280;
+      text-decoration: none;
+    }
+    .footer-link:hover { color: #2563eb; }
+    .footer-version { font-size: 10px; color: #d1d5db; }
+
+    /* ── Toast ── */
+    .toast {
+      position: fixed;
+      bottom: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #1f2937;
+      color: #fff;
+      padding: 6px 14px;
+      border-radius: 99px;
+      font-size: 12px;
+      font-weight: 500;
+      opacity: 0;
+      transition: opacity 0.2s;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+    .toast.show { opacity: 1; }
+
+    /* ── Spinner ── */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spin { display: inline-block; animation: spin 0.8s linear infinite; }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <div>
+      <div class="header-title">IGA Milk Manager</div>
+      <div class="header-sub" id="status-text">Checking Lactalis…</div>
+    </div>
+    <div class="status-dot" id="status-dot"></div>
+  </div>
+
+  <!-- Next delivery -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-label">Next Delivery</span>
+      <button class="section-action" id="refresh-btn" title="Re-scan the Lactalis page for schedule">
+        ↻ Refresh
+      </button>
+    </div>
+    <div id="delivery-content">
+      <div class="delivery-date" style="color:#9ca3af">—</div>
+      <div class="delivery-sub">Loading…</div>
+    </div>
+  </div>
+
+  <!-- Pending order -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-label">Pending Order</span>
+    </div>
+    <div id="order-content" class="order-empty">No order queued</div>
+  </div>
+
+  <!-- Action buttons -->
+  <div class="btn-row">
+    <button class="btn btn-primary" id="fill-btn" disabled>
+      ↑ Fill Quick Order
+    </button>
+    <button class="btn btn-danger" id="clear-btn" disabled>
+      Clear
+    </button>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <a class="footer-link" href="http://localhost:5173" target="_blank" id="pwa-link">
+      Open PWA ↗
+    </a>
+    <span class="footer-version">v1.0.0</span>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
