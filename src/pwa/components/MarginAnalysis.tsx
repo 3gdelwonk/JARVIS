@@ -254,24 +254,20 @@ export default function MarginAnalysis() {
   const products = useLiveQuery(() => db.products.toArray(), [])
   const priceHistory = useLiveQuery(() => db.priceHistory.toArray(), [])
 
-  if (!products || !priceHistory) {
-    return (
-      <div className="p-4 text-sm text-gray-400">Loading…</div>
-    )
-  }
-
-  const active = products.filter((p) => p.active)
+  // ── All hooks MUST come before any conditional return ──────────────────────
 
   // M5 — pre-group price history by productId so MarginRow doesn't O(n) filter per product
   const priceHistoryByProduct = useMemo(() => {
     const map = new Map<number, PriceRecord[]>()
-    for (const r of priceHistory) {
+    for (const r of priceHistory ?? []) {
       const arr = map.get(r.productId) ?? []
       arr.push(r)
       map.set(r.productId, arr)
     }
     return map
   }, [priceHistory])
+
+  const active = useMemo(() => (products ?? []).filter((p) => p.active), [products])
 
   // Memoised — only recalculates when products or priceHistory change, not on sort change
   const rows = useMemo<ProductMargin[]>(() => active.map((p) => {
@@ -290,7 +286,7 @@ export default function MarginAnalysis() {
       recentPriceChanges[0]!.costPrice > recentPriceChanges[1]!.costPrice
 
     return { product: p, marginPct, dailyProfit, avgDailySales, recentPriceChanges, hasPriceRise }
-  }), [active, priceHistoryByProduct]) // eslint-disable-line react-hooks/exhaustive-deps
+  }), [active, priceHistoryByProduct])
 
   // Memoised sort — only re-sorts when rows or sort mode change
   const sorted = useMemo(() => [...rows].sort((a, b) => {
@@ -306,6 +302,10 @@ export default function MarginAnalysis() {
     }
     return b.dailyProfit - a.dailyProfit
   }), [rows, sort])
+
+  if (!products || !priceHistory) {
+    return <div className="p-4 text-sm text-gray-400">Loading…</div>
+  }
 
   // Summary stats
   const withSell   = rows.filter((r) => r.marginPct !== null)

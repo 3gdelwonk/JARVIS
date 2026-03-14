@@ -152,6 +152,18 @@ function SmartRetailSection() {
               )}
             </div>
           )}
+          {maintResult.detectedColumns.length > 0 && (
+            <details className="mt-1.5 ml-5">
+              <summary className="text-xs text-gray-500 cursor-pointer select-none">
+                Detected columns ({maintResult.detectedColumns.filter((c) => c.startsWith('✓')).length}/{maintResult.detectedColumns.length} matched)
+              </summary>
+              <ul className="mt-1 space-y-0.5">
+                {maintResult.detectedColumns.map((c, i) => (
+                  <li key={i} className={`text-[11px] ${c.startsWith('✓') ? 'text-green-700' : 'text-red-600 font-medium'}`}>{c}</li>
+                ))}
+              </ul>
+            </details>
+          )}
           <p className="flex items-center gap-1 text-[11px] text-green-600 ml-5">
             <Clock size={10} /> {formatTime(maintResult.lastImportedAt)}
           </p>
@@ -194,11 +206,13 @@ function InvoiceSection() {
   const [saveMsg, setSaveMsg] = useState('')
   const [pdfLoading, setPdfLoading] = useState(false)
   const [showLines, setShowLines] = useState(false)
+  const [rawTextPreview, setRawTextPreview] = useState('')
 
   function handleParse() {
     setParseError('')
     setSaveMsg('')
     setParsed(null)
+    setRawTextPreview('')
     const text = pasteText.trim()
     if (!text) { setParseError('Paste invoice text first.'); return }
     try {
@@ -207,9 +221,12 @@ function InvoiceSection() {
         setParseError('Could not find a Document Number — check the pasted text is a complete Lactalis invoice.')
         return
       }
-      if (result.lineCount === 0) {
+      if (result.lineCount === 0 && result.unparsedLines.length === 0) {
         setParseError('No line items found. Verify the invoice text is complete.')
         return
+      }
+      if (result.lineCount === 0) {
+        setParseError('Product codes were found but line items could not be fully parsed — see the warning below.')
       }
       setParsed(result)
     } catch (e) {
@@ -220,16 +237,22 @@ function InvoiceSection() {
   async function handlePDF(file: File) {
     setPdfLoading(true)
     setParseError('')
+    setParsed(null)
+    setRawTextPreview('')
     try {
       const text = await extractTextFromPDF(file)
       setPasteText(text)
+      setRawTextPreview(text.slice(0, 1000))
       // Auto-parse after extraction
       const result = parseInvoiceText(text)
       if (!result) {
         setParseError('Could not extract Document Number from PDF — paste the text manually instead.')
-      } else if (result.lineCount === 0) {
+      } else if (result.lineCount === 0 && result.unparsedLines.length === 0) {
         setParseError('PDF text extraction produced no line items — paste the text manually instead.')
       } else {
+        if (result.lineCount === 0) {
+          setParseError('Product codes were found but line items could not be fully parsed — see the warning below.')
+        }
         setParsed(result)
       }
     } catch (e) {
@@ -281,7 +304,7 @@ function InvoiceSection() {
       {/* Paste area */}
       <textarea
         value={pasteText}
-        onChange={(e) => { setPasteText(e.target.value); setParsed(null); setSaveMsg('') }}
+        onChange={(e) => { setPasteText(e.target.value); setParsed(null); setSaveMsg(''); setRawTextPreview('') }}
         placeholder={`Paste invoice text here…\n\nExample:\n${SAMPLE_TEXT}`}
         rows={6}
         className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs font-mono resize-none focus:outline-none focus:ring-1 focus:ring-blue-400"
@@ -302,6 +325,18 @@ function InvoiceSection() {
           <AlertTriangle size={15} className="text-red-500 shrink-0 mt-0.5" />
           <p className="text-sm text-red-700">{parseError}</p>
         </div>
+      )}
+
+      {/* Raw PDF text preview — diagnostic tool for bad extractions */}
+      {rawTextPreview && (
+        <details className="border border-gray-200 rounded-lg overflow-hidden">
+          <summary className="px-3 py-2 bg-gray-50 text-xs text-gray-600 cursor-pointer select-none flex items-center gap-1">
+            <Eye size={11} /> Raw PDF text preview (first 1000 chars)
+          </summary>
+          <pre className="px-3 py-2 text-[11px] font-mono text-gray-700 whitespace-pre-wrap break-all max-h-48 overflow-auto">
+            {rawTextPreview}
+          </pre>
+        </details>
       )}
 
       {/* Preview */}
@@ -347,6 +382,20 @@ function InvoiceSection() {
                   )}
                 </div>
               ))}
+            </div>
+          )}
+
+          {parsed.unparsedLines.length > 0 && (
+            <div className="px-3 py-2 bg-amber-50 border-t border-amber-200">
+              <p className="text-xs font-medium text-amber-800 mb-1 flex items-center gap-1">
+                <AlertTriangle size={11} />
+                {parsed.unparsedLines.length} product code{parsed.unparsedLines.length > 1 ? 's' : ''} found but couldn't be fully parsed — skipped
+              </p>
+              <ul className="space-y-0.5">
+                {parsed.unparsedLines.map((l, i) => (
+                  <li key={i} className="text-[11px] font-mono text-amber-900 bg-amber-100 rounded px-1.5 py-0.5 break-all">{l}</li>
+                ))}
+              </ul>
             </div>
           )}
 

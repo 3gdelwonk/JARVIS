@@ -44,6 +44,8 @@ export interface ParsedInvoice {
   totalAmount: number
   deliveries: ParsedDelivery[]
   lineCount: number
+  rawText: string           // full extracted PDF/paste text
+  unparsedLines: string[]   // buffers with a product code that still failed parseLineItem
 }
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
@@ -184,14 +186,41 @@ export function parseInvoiceText(text: string): ParsedInvoice | null {
 
   // Parse delivery notes and their line items
   const deliveries: ParsedDelivery[] = []
+  const unparsedLines: string[] = []
   let current: ParsedDelivery | null = null
+
+  // Multi-line row reconstruction: pdfjs-dist sometimes emits one text
+  // fragment per column, so a single invoice row may arrive as 2-3 lines.
+  // We buffer consecutive lines and flush when we hit a new CODE_RE or a
+  // section boundary, then pass the joined buffer to parseLineItem.
+  let lineBuffer: string[] = []
+  let bufferHasCode = false
+
+  const flushBuffer = () => {
+    if (!bufferHasCode || lineBuffer.length === 0) {
+      lineBuffer = []
+      bufferHasCode = false
+      return
+    }
+    const joined = lineBuffer.join(' ').replace(/\s+/g, ' ').trim()
+    lineBuffer = []
+    bufferHasCode = false
+    if (!current || !joined) return
+    const item = parseLineItem(joined)
+    if (item) {
+      current.lines.push(item)
+    } else {
+      unparsedLines.push(joined)
+    }
+  }
 
   for (const line of lines) {
     if (!line) continue
 
-    // New delivery note block
+    // New delivery note block — flush buffer first
     const dnMatch = line.match(DELIVERY_NOTE_RE)
     if (dnMatch) {
+      flushBuffer()
       current = {
         noteNumber: dnMatch[1],
         deliveryDate: parseInvoiceDate(dnMatch[2]),
@@ -205,19 +234,35 @@ export function parseInvoiceText(text: string): ParsedInvoice | null {
 
     if (!current) continue
 
-    // Sub-total line — ends this delivery block
+    // Sub-total line — flush and end this delivery block
     if (/^Sub-?\s*total/i.test(line)) {
+      flushBuffer()
       const m = line.match(/([0-9,]+\.[0-9]+(?:CR)?)/)
       if (m) current.subTotal = Math.abs(parseAmount(m[1].replace(',', '')))
       continue
     }
 
-    // Skip clearly non-item lines
-    if (/^(Totals|TOTAL|GST|Page|Document|Date|Invoice|Delivery|Purchase|IGA|Account)/i.test(line)) continue
+    // Skip clearly non-item lines (flush first so we don't lose a partial buffer)
+    if (/^(Totals|TOTAL|GST|Page|Document|Date|Invoice|Delivery|Purchase|IGA|Account)/i.test(line)) {
+      flushBuffer()
+      continue
+    }
 
-    const item = parseLineItem(line)
-    if (item) current.lines.push(item)
+    // Multi-line joining logic
+    if (CODE_RE.test(line)) {
+      // This line has a product code — flush old buffer, start new one
+      flushBuffer()
+      lineBuffer = [line]
+      bufferHasCode = true
+    } else if (bufferHasCode && lineBuffer.length < 3) {
+      // Continuation line (numeric columns on a separate fragment) — append
+      lineBuffer.push(line)
+    }
+    // else: no active buffer with code — line is not part of an item row
   }
+
+  // Final flush for any remaining buffer
+  flushBuffer()
 
   const lineCount = deliveries.reduce((n, d) => n + d.lines.length, 0)
 
@@ -232,6 +277,8 @@ export function parseInvoiceText(text: string): ParsedInvoice | null {
     totalAmount,
     deliveries,
     lineCount,
+    rawText: text,
+    unparsedLines,
   }
 }
 
@@ -257,6 +304,7 @@ export async function saveInvoice(
     invoiceDate: parsed.invoiceDate,
     totalAmount: parsed.totalAmount,
     parsedAt: new Date(),
+    rawText: parsed.rawText,
   }
 
   const recordId = (await db.invoiceRecords.add(record)) as number

@@ -22,6 +22,7 @@ export interface MaintenanceImportResult {
   anomalies: string[]
   skipped: number
   lastImportedAt: Date
+  detectedColumns: string[]   // e.g. ["✓ Barcode → \"Barcode\"", "✗ Order Code (not found)"]
 }
 
 export interface StockImportResult {
@@ -44,6 +45,12 @@ async function fileToRows(file: File): Promise<Row[]> {
   return csvToRows(file)
 }
 
+// Normalise header strings — handles non-breaking spaces and extra whitespace
+// that Smart Retail XLSX exports sometimes include.
+function normalizeHeader(h: string): string {
+  return h.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
 function xlsxToRows(file: File): Promise<Row[]> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -52,9 +59,17 @@ function xlsxToRows(file: File): Promise<Row[]> {
         const data = e.target?.result
         const workbook = XLSX.read(data, { type: 'array' })
         const sheet = workbook.Sheets[workbook.SheetNames[0]]
-        const rows = XLSX.utils.sheet_to_json<Row>(sheet, {
+        const raw = XLSX.utils.sheet_to_json<Row>(sheet, {
           defval: '',
           raw: false,
+        })
+        // Remap all keys through the header normaliser
+        const rows = raw.map((row) => {
+          const normalised: Row = {}
+          for (const [k, v] of Object.entries(row)) {
+            normalised[normalizeHeader(k)] = v
+          }
+          return normalised
         })
         resolve(rows)
       } catch (err) {
@@ -81,7 +96,7 @@ function csvToRows(file: File): Promise<Row[]> {
         header: true,
         delimiter,
         skipEmptyLines: true,
-        transformHeader: (h) => h.trim(),
+        transformHeader: (h) => normalizeHeader(h),
         transform: (v) => v.trim(),
       })
 
@@ -141,6 +156,20 @@ function parsePrice(s: string): number {
 const LACTALIS_SUPPLIER = '01240657'
 const METCASH_SUPPLIER = '90770'
 
+// Relaxed active check: accept yes/y/1/true/active and empty (active-only exports)
+const ACTIVE_ACCEPTED = new Set(['yes', 'y', '1', 'true', 'active'])
+function isActive(raw: string): boolean {
+  const v = raw.toLowerCase().trim()
+  return v === '' || ACTIVE_ACCEPTED.has(v)
+}
+
+// Relaxed department check: accept milk/dairy/chilled/fresh and empty
+const MILK_DEPT_TERMS = ['milk', 'dairy', 'chilled', 'fresh']
+function isMilkDept(raw: string): boolean {
+  const v = raw.toLowerCase().trim()
+  return v === '' || MILK_DEPT_TERMS.some((t) => v.includes(t))
+}
+
 export async function parseItemMaintenance(
   file: File,
 ): Promise<MaintenanceImportResult> {
@@ -152,6 +181,28 @@ export async function parseItemMaintenance(
     anomalies: [],
     skipped: 0,
     lastImportedAt: new Date(),
+    detectedColumns: [],
+  }
+
+  // Build detected-columns report from the first row
+  if (rows.length > 0) {
+    const firstRow = rows[0]
+    const expectedCols: Array<[string, string[]]> = [
+      ['Active', ['Active', 'active']],
+      ['Department Name', ['Department Name', 'department name', 'dept name']],
+      ['Barcode', ['Barcode', 'barcode', 'EAN']],
+      ['Supplier Code', ['Supplier Code', 'supplier code', 'supplier_code']],
+      ['Description', ['Description', 'description']],
+      ['Order Code', ['Order Code', 'order code', 'order_code', 'item number']],
+      ['Normal Sell', ['Normal Sell', 'normal sell', 'sell price']],
+      ['Normal Cost', ['Normal Cost', 'normal cost', 'cost price']],
+    ]
+    for (const [label, candidates] of expectedCols) {
+      const found = findCol(firstRow, candidates)
+      result.detectedColumns.push(
+        found ? `✓ ${label} → "${found}"` : `✗ ${label} (not found)`,
+      )
+    }
   }
 
   // Group rows by barcode — collect both supplier rows
@@ -161,8 +212,8 @@ export async function parseItemMaintenance(
     const active = getVal(row, ['Active', 'active'])
     const deptName = getVal(row, ['Department Name', 'department name', 'dept name'])
 
-    if (active.toLowerCase() !== 'yes') { result.skipped++; continue }
-    if (!deptName.toLowerCase().includes('milk')) { result.skipped++; continue }
+    if (!isActive(active)) { result.skipped++; continue }
+    if (!isMilkDept(deptName)) { result.skipped++; continue }
 
     const barcode = getVal(row, ['Barcode', 'barcode', 'EAN'])
     if (!barcode || barcode === 'NH') { result.skipped++; continue }
@@ -216,10 +267,43 @@ export async function parseItemMaintenance(
       await db.products.update(existing.id!, updates)
       result.updated++
     } else {
-      // New product not in seed — record but don't auto-create (owner should review)
+      // Auto-create new product from Smart Retail data
       const name = getVal(sourceRow, ['Description', 'description'])
-      result.anomalies.push(`New product not in catalogue: "${name}" (barcode ${barcode}) — add manually if needed`)
-      result.newProducts++
+      const orderCode = getVal(sourceRow, ['Order Code', 'order code', 'order_code', 'item number'])
+      const itemNumber = orderCode ? parseInt(orderCode, 10).toString() : ''
+      const invoiceCode = itemNumber ? itemNumber.padStart(8, '0') : barcode
+      try {
+        await db.products.add({
+          barcode,
+          invoiceCode,
+          itemNumber,
+          name,
+          smartRetailName: name,
+          category: 'fresh',
+          isGstBearing: false,
+          active: true,
+          orderUnit: 'EA',
+          unitsPerOrder: 1,
+          minStockLevel: 0,
+          defaultOrderQty: 1,
+          targetDaysOfStock: 7,
+          lactalisCostPrice: lactalisCost ?? 0,
+          metcashCostPrice: metcashCost,
+          sellPrice,
+          orderFrequency: 'occasional',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
+        result.newProducts++
+        result.anomalies.push(
+          `Auto-created: "${name}" (item# ${itemNumber || barcode}) — review category and GST status`,
+        )
+      } catch {
+        // Duplicate invoiceCode or other Dexie constraint — demote to anomaly
+        result.anomalies.push(
+          `New product not in catalogue: "${name}" (barcode ${barcode}) — add manually if needed`,
+        )
+      }
     }
   }
 
