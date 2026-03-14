@@ -427,6 +427,57 @@
     return slots.filter((s) => s.deliveryDate >= todayStr)
   }
 
+  // ─── Strategy 0: Direct API call ─────────────────────────────────────────────
+
+  /**
+   * Calls /delivery-slots/get-slots/869 directly.
+   * Status codes: 0 = no delivery, 1 = available (with cutoff), 2 = cutoff passed.
+   * The ID 869 is the delivery slot configuration for this customer account.
+   * Cutoff timestamps are UTC — converted to Melbourne local time for storage.
+   */
+  const SLOT_CONFIG_ID = 869
+
+  function utcToMelbourneDateTime(utcString) {
+    const d = new Date(utcString)
+    const date = d.toLocaleDateString('en-CA', { timeZone: 'Australia/Melbourne' }) // YYYY-MM-DD
+    const time = d.toLocaleTimeString('en-GB', { timeZone: 'Australia/Melbourne', hour: '2-digit', minute: '2-digit', hour12: false })
+    return { date, time }
+  }
+
+  async function fetchDeliverySlotsAPI() {
+    try {
+      const resp = await fetch(`/delivery-slots/get-slots/${SLOT_CONFIG_ID}?preselectCurrentSlot=1`, {
+        credentials: 'include',
+        headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+      })
+      if (!resp.ok) return null
+      const data = await resp.json()
+      if (!Array.isArray(data)) return null
+
+      const slots = []
+      for (const day of data) {
+        const ts = day.time_slots?.find((t) => t.status === 1 || t.status === 2)
+        if (!ts) continue  // status 0 = not a delivery day
+
+        let orderCutoffDate = prevBusinessDay(day.date)
+        let orderCutoffTime = '23:59'
+
+        if (ts.cutoff) {
+          const local = utcToMelbourneDateTime(ts.cutoff)
+          orderCutoffDate = local.date
+          orderCutoffTime = local.time
+        }
+
+        slots.push({ deliveryDate: day.date, orderCutoffDate, orderCutoffTime })
+      }
+
+      return slots.length > 0 ? slots : null
+    } catch (e) {
+      if (DEBUG) console.log('[Milk Manager Scraper] API fetch failed:', e.message)
+      return null
+    }
+  }
+
   // ─── Main orchestrator ───────────────────────────────────────────────────────
 
   async function scrapeAndStore() {
@@ -435,8 +486,15 @@
     let slots = []
     let source = 'none'
 
-    // Strategy A: manage_deliveries page — richest source of slots
-    if (pageType === 'manage_deliveries') {
+    // Strategy 0: Direct API — most accurate, works on any Lactalis page
+    const apiSlots = await fetchDeliverySlotsAPI()
+    if (apiSlots) {
+      slots = apiSlots
+      source = 'delivery_slots_api'
+    }
+
+    // Strategy A: manage_deliveries page — fallback if API fails
+    if (slots.length === 0 && pageType === 'manage_deliveries') {
       const tableSlots = scrapeManageDeliveriesPage()
       if (tableSlots.length > 0) {
         slots = tableSlots

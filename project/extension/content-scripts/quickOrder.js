@@ -202,6 +202,63 @@
     el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }))
   }
 
+  // ─── Direct API submit ────────────────────────────────────────────────────
+
+  /**
+   * fillViaAPI — posts directly to /customer/product/quick-add/ using the
+   * verified OroCommerce payload format. Extracts CSRF token from the form.
+   * On success the page redirects to the checkout — user then clicks Submit Order.
+   */
+  async function fillViaAPI(order) {
+    const csrfToken = document.querySelector('input[name="oro_product_quick_add[_token]"]')?.value
+    if (!csrfToken) {
+      return { ok: false, error: 'CSRF token not found — make sure you are on the Quick Order page.' }
+    }
+
+    const products = order.lines
+      .filter((l) => l.qty > 0)
+      .map((l, index) => ({ sku: l.itemNumber, unit: 'item', quantity: l.qty, index }))
+
+    if (!products.length) return { ok: false, error: 'Order has no items with qty > 0' }
+
+    const formData = new FormData()
+    formData.append('oro_product_quick_add[component]', 'oro_shopping_list_to_checkout_quick_add_processor')
+    formData.append('oro_product_quick_add[additional]', '')
+    formData.append('oro_product_quick_add[transition]', 'start_from_quickorderform')
+    formData.append('oro_product_quick_add[_token]', csrfToken)
+    formData.append('oro_product_quick_add[products]', JSON.stringify(products))
+
+    try {
+      const resp = await fetch('/customer/product/quick-add/', {
+        method: 'POST',
+        body: formData,
+        credentials: 'include',
+        redirect: 'manual',
+      })
+
+      // Success = 302 redirect to checkout page
+      if (resp.status === 302 || resp.status === 301) {
+        const loc = resp.headers.get('Location')
+        if (loc) { window.location.href = loc; return { ok: true } }
+      }
+
+      // Some OroCommerce versions return 200 with JSON containing redirectUrl
+      if (resp.ok) {
+        const text = await resp.text()
+        try {
+          const json = JSON.parse(text)
+          const url = json.redirectUrl || json.url
+          if (url) { window.location.href = url; return { ok: true } }
+        } catch { /* not JSON, fall through */ }
+        return { ok: true }
+      }
+
+      return { ok: false, error: `Server returned ${resp.status} — try the Paste method instead` }
+    } catch (e) {
+      return { ok: false, error: `Network error: ${e.message}` }
+    }
+  }
+
   // ─── Fill methods ─────────────────────────────────────────────────────────
 
   /**
@@ -517,7 +574,10 @@
         <div id="summary">Loading order…</div>
         <div id="lines-preview"></div>
         <div id="status-bar"></div>
-        <button class="btn btn-primary" id="fill-paste-btn" disabled>
+        <button class="btn btn-primary" id="fill-api-btn" disabled>
+          🚀 Submit to Checkout
+        </button>
+        <button class="btn btn-secondary" id="fill-paste-btn" disabled>
           ↑ Fill via Paste
         </button>
         <button class="btn btn-secondary" id="fill-csv-btn" disabled>
@@ -577,9 +637,10 @@
       previewEl.appendChild(row)
     }
 
+    shadow.getElementById('fill-api-btn').disabled = false
     shadow.getElementById('fill-paste-btn').disabled = false
     shadow.getElementById('fill-csv-btn').disabled = false
-    setStatus('Ready — choose a fill method', 'info')
+    setStatus('Ready — Submit to Checkout sends all items directly', 'info')
   }
 
   // ─── Event listeners ───────────────────────────────────────────────────────
@@ -597,6 +658,29 @@
   shadow.getElementById('dismiss-btn').addEventListener('click', () => {
     createOrderObserver?.disconnect()  // stop watching if panel is dismissed early
     host.remove()
+  })
+
+  // Submit via API (primary method)
+  shadow.getElementById('fill-api-btn').addEventListener('click', async () => {
+    if (!currentOrder) return
+    shadow.getElementById('fill-api-btn').disabled = true
+    shadow.getElementById('fill-paste-btn').disabled = true
+    shadow.getElementById('fill-csv-btn').disabled = true
+    setStatus('Submitting to checkout…', 'info')
+    panelState = 'filling'
+
+    const result = await fillViaAPI(currentOrder)
+
+    if (!result.ok) {
+      setStatus(result.error, 'error')
+      panelState = 'error'
+      shadow.getElementById('fill-api-btn').disabled = false
+      shadow.getElementById('fill-paste-btn').disabled = false
+      shadow.getElementById('fill-csv-btn').disabled = false
+    } else {
+      setStatus('Redirecting to checkout…', 'success')
+      panelState = 'filled'
+    }
   })
 
   // Fill via Paste
@@ -649,10 +733,14 @@
     if (msg.type === 'FILL_ORDER') {
       currentOrder = msg.order
       renderOrder(currentOrder)
-      // Expand panel if minimised
       shadow.getElementById('panel').classList.remove('minimised')
       shadow.getElementById('minimise-btn').textContent = '—'
       sendResponse({ ok: true })
+    }
+    if (msg.type === 'GET_PAGE_INFO') {
+      // Lets popup query whether CSRF token is available on this page
+      const hasCsrf = !!document.querySelector('input[name="oro_product_quick_add[_token]"]')
+      sendResponse({ pageType: window.__milkManagerPageType__, hasCsrf })
     }
   })
 

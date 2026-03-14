@@ -21,7 +21,10 @@ function detectPageType() {
     url.includes('quickorder') ||
     url.includes('quick-order') ||
     url.includes('quick_order') ||
-    title.includes('quick order')
+    url.includes('quick-add') ||
+    url.includes('quickadd') ||
+    title.includes('quick order') ||
+    title.includes('quick add')
   ) return 'quick_order'
 
   if (
