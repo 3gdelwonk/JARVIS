@@ -165,10 +165,22 @@ export function parseInvoiceText(text: string): ParsedInvoice | null {
   }
 
   // Extract header fields (scan all lines — headers may repeat on page 2)
-  for (const line of lines) {
+  let sawDocNoLabel = false
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li]
     if (!documentNumber) {
+      // Same-line: "Document No: 241411783"
       const m = line.match(/Document\s*No[.:]?\s*([0-9]{6,})/i)
-      if (m) documentNumber = m[1]
+      if (m) {
+        documentNumber = m[1]
+      } else if (/Document\s*No/i.test(line)) {
+        // Label found but no number on same line — look ahead
+        sawDocNoLabel = true
+      } else if (sawDocNoLabel && /^\s*([0-9]{6,})/.test(line)) {
+        // First number on a line after "Document No" label
+        documentNumber = line.match(/^\s*([0-9]{6,})/)![1]
+        sawDocNoLabel = false
+      }
     }
     if (!dateOrdered) {
       const m = line.match(/Date\s*Ordered[.:]?\s*([\d]+\.[\d]+\.[\d]+)/i)

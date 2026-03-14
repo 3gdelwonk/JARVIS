@@ -59,6 +59,24 @@ function xlsxToRows(file: File): Promise<Row[]> {
         const data = e.target?.result
         const workbook = XLSX.read(data, { type: 'array' })
         const sheet = workbook.Sheets[workbook.SheetNames[0]]
+        // Smart Retail exports sometimes have a truncated !ref (e.g. A1:C1)
+        // that doesn't cover all columns/rows. Recalculate from actual cells.
+        const actualRef = XLSX.utils.encode_range(
+          XLSX.utils.decode_range(
+            Object.keys(sheet)
+              .filter((k) => !k.startsWith('!'))
+              .reduce((ref, cell) => {
+                const r = XLSX.utils.decode_cell(cell)
+                const cur = ref ? XLSX.utils.decode_range(ref) : { s: r, e: r }
+                cur.s.r = Math.min(cur.s.r, r.r)
+                cur.s.c = Math.min(cur.s.c, r.c)
+                cur.e.r = Math.max(cur.e.r, r.r)
+                cur.e.c = Math.max(cur.e.c, r.c)
+                return XLSX.utils.encode_range(cur)
+              }, sheet['!ref'] ?? 'A1'),
+          ),
+        )
+        sheet['!ref'] = actualRef
         const raw = XLSX.utils.sheet_to_json<Row>(sheet, {
           defval: '',
           raw: false,
