@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { ChevronDown, ChevronUp, ExternalLink, Search } from 'lucide-react'
 import { db } from '../lib/db'
-import type { Product } from '../lib/types'
+import type { Product, StockSnapshot } from '../lib/types'
 
 // Money helper — avoids floating point errors
 const money = (val: number) => Math.round(val * 100) / 100
@@ -41,7 +41,7 @@ interface EditState {
   sellPrice: string
 }
 
-function ProductRow({ product }: { product: Product }) {
+function ProductRow({ product, qoh }: { product: Product; qoh: number | null }) {
   const [expanded, setExpanded] = useState(false)
   const [saving, setSaving] = useState(false)
   const [edit, setEdit] = useState<EditState>({
@@ -137,6 +137,8 @@ function ProductRow({ product }: { product: Product }) {
             </span>
             <span className="text-xs text-gray-400">·</span>
             <span className={`text-xs ${marginColor}`}>{margin}%</span>
+            <span className="text-xs text-gray-400">·</span>
+            <span className="text-xs text-gray-500">QOH {qoh !== null ? qoh : '—'}</span>
           </div>
         </div>
         <div className="flex items-center gap-1.5 shrink-0 mt-0.5">
@@ -230,6 +232,19 @@ export default function ProductList() {
   const [search, setSearch] = useState('')
 
   const products = useLiveQuery(() => db.products.toArray(), [])
+  const stockMap = useLiveQuery(async () => {
+    const snapshots = await db.stockSnapshots.toArray()
+    const latest = new Map<number, StockSnapshot>()
+    for (const s of snapshots) {
+      const prev = latest.get(s.productId)
+      if (!prev || new Date(s.importedAt).getTime() > new Date(prev.importedAt).getTime()) {
+        latest.set(s.productId, s)
+      }
+    }
+    const map = new Map<number, number>()
+    for (const [pid, snap] of latest) map.set(pid, snap.qoh)
+    return map
+  }, [])
 
   if (!products) {
     return <div className="p-4 text-gray-500 text-sm">Loading products…</div>
@@ -272,14 +287,14 @@ export default function ProductList() {
       <div className="flex-1 overflow-auto">
         {Object.entries(grouped).map(([cat, items]) => (
           <div key={cat}>
-            <div className="px-3 py-1.5 bg-gray-100 sticky top-[68px] z-10 flex items-center justify-between">
+            <div className="px-3 py-1.5 bg-gray-100 sticky top-0 z-10 flex items-center justify-between">
               <span className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
                 {CATEGORY_LABELS[cat]}
               </span>
               <span className="text-xs text-gray-500">{items.length} SKUs</span>
             </div>
             {items.map((p) => (
-              <ProductRow key={p.id} product={p} />
+              <ProductRow key={p.id} product={p} qoh={stockMap?.get(p.id!) ?? null} />
             ))}
           </div>
         ))}

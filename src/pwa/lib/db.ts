@@ -52,6 +52,28 @@ export class MilkManagerDB extends Dexie {
 
 export const db = new MilkManagerDB()
 
+export async function clearAllData(): Promise<void> {
+  await db.transaction('rw', [
+    db.invoiceRecords, db.invoiceLines, db.priceHistory,
+    db.stockSnapshots, db.orders, db.orderLines,
+    db.expiryBatches, db.wasteLog, db.products,
+  ], async () => {
+    await Promise.all([
+      db.invoiceRecords.clear(),
+      db.invoiceLines.clear(),
+      db.priceHistory.clear(),
+      db.stockSnapshots.clear(),
+      db.orders.clear(),
+      db.orderLines.clear(),
+      db.expiryBatches.clear(),
+      db.wasteLog.clear(),
+      db.products.clear(),
+    ])
+  })
+  // Re-seed the product catalogue
+  await seedDatabase()
+}
+
 export async function seedDatabase(): Promise<void> {
   const count = await db.products.count()
   if (count >= SEED_PRODUCTS.length) return

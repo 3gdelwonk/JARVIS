@@ -1,5 +1,5 @@
 import { Component, useEffect, useState, type ReactNode } from 'react'
-import { CalendarClock, LayoutDashboard, ShoppingCart, TrendingUp, Upload, Package, Settings } from 'lucide-react'
+import { CalendarClock, LayoutDashboard, ShoppingCart, TrendingUp, Upload, Package, Settings, BarChart3 } from 'lucide-react'
 import { seedDatabase } from './pwa/lib/db'
 import { applyStatusUpdates, applyExtensionSchedule } from './pwa/lib/extensionSync'
 import Dashboard from './pwa/components/Dashboard'
@@ -54,6 +54,7 @@ const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'import',    label: 'Import',   icon: <Upload size={18} /> },
   { id: 'products',  label: 'Products', icon: <Package size={18} /> },
   { id: 'margins',   label: 'Margins',  icon: <TrendingUp size={18} /> },
+  { id: 'history',   label: 'History',  icon: <BarChart3 size={18} /> },
 ]
 
 const TAB_TITLES: Record<Tab, string> = {

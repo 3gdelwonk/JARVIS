@@ -26,12 +26,15 @@ function formatTime(d: Date): string {
 // ─── Shared Drop Zone ────────────────────────────────────────────────────────
 
 function DropZone({
-  onFile, loading, label, accept,
+  onFiles, loading, label, accept, multiple, fileCount, progressCount,
 }: {
-  onFile: (file: File) => void
+  onFiles: (files: File[]) => void
   loading: boolean
   label: string
   accept?: string
+  multiple?: boolean
+  fileCount?: number
+  progressCount?: number
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [dragging, setDragging] = useState(false)
@@ -39,7 +42,11 @@ function DropZone({
     <div
       onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
       onDragLeave={() => setDragging(false)}
-      onDrop={(e) => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files[0]; if (f) onFile(f) }}
+      onDrop={(e) => {
+        e.preventDefault(); setDragging(false)
+        const files = Array.from(e.dataTransfer.files)
+        if (files.length) onFiles(multiple ? files : [files[0]])
+      }}
       onClick={() => !loading && inputRef.current?.click()}
       className={`border-2 border-dashed rounded-xl p-5 text-center cursor-pointer transition-colors ${
         dragging ? 'border-blue-500 bg-blue-50'
@@ -48,10 +55,19 @@ function DropZone({
       }`}
     >
       <input ref={inputRef} type="file" accept={accept ?? '.csv,.xlsx,.xls'} className="hidden"
-        onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f) }} />
+        multiple={multiple}
+        onChange={(e) => {
+          const files = Array.from(e.target.files ?? [])
+          if (files.length) onFiles(multiple ? files : [files[0]])
+          e.target.value = ''
+        }} />
       <Upload size={22} className={`mx-auto mb-2 ${loading ? 'text-gray-300' : 'text-gray-400'}`} />
       {loading
-        ? <p className="text-sm text-gray-500">Processing…</p>
+        ? <p className="text-sm text-gray-500">
+            {fileCount && fileCount > 1
+              ? `Processing ${progressCount ?? 0}/${fileCount}…`
+              : 'Processing…'}
+          </p>
         : <>
             <p className="text-sm font-medium text-gray-700">{label}</p>
             <p className="text-xs text-gray-400 mt-0.5">Tap or drag & drop</p>
@@ -87,27 +103,65 @@ async function detectFromFile(file: File): Promise<'item_maintenance' | 'item_st
 
 function SmartRetailSection() {
   const [loading, setLoading] = useState(false)
+  const [fileCount, setFileCount] = useState(0)
+  const [progressCount, setProgressCount] = useState(0)
   const [maintResult, setMaintResult] = useState<MaintenanceImportResult | null>(null)
   const [stockResult, setStockResult] = useState<StockImportResult | null>(null)
   const [error, setError] = useState('')
   const [showAnomalies, setShowAnomalies] = useState(false)
 
-  async function handleFile(file: File) {
+  async function handleFiles(files: File[]) {
     setLoading(true)
+    setFileCount(files.length)
+    setProgressCount(0)
     setError('')
     setMaintResult(null)
     setStockResult(null)
     try {
-      const type = await detectFromFile(file)
-      if (type === 'item_maintenance') {
-        setMaintResult(await parseItemMaintenance(file))
-      } else if (type === 'item_stock') {
-        setStockResult(await parseStockReport(file))
-      } else {
-        setError('Could not detect report type — expected Item Maintenance or Item Stock columns.')
+      let mergedMaint: MaintenanceImportResult | null = null
+      let mergedStock: StockImportResult | null = null
+      const errors: string[] = []
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i]
+        try {
+          const type = await detectFromFile(file)
+          if (type === 'item_maintenance') {
+            const r = await parseItemMaintenance(file)
+            if (!mergedMaint) {
+              mergedMaint = r
+            } else {
+              mergedMaint.updated += r.updated
+              mergedMaint.newProducts += r.newProducts
+              mergedMaint.skipped += r.skipped
+              mergedMaint.anomalies = mergedMaint.anomalies.concat(r.anomalies)
+              mergedMaint.detectedColumns = mergedMaint.detectedColumns.concat(
+                r.detectedColumns.filter((c) => !mergedMaint!.detectedColumns.includes(c))
+              )
+              mergedMaint.lastImportedAt = r.lastImportedAt
+            }
+          } else if (type === 'item_stock') {
+            const r = await parseStockReport(file)
+            if (!mergedStock) {
+              mergedStock = r
+            } else {
+              mergedStock.snapshots += r.snapshots
+              mergedStock.matched += r.matched
+              mergedStock.unmatched += r.unmatched
+              mergedStock.lastImportedAt = r.lastImportedAt
+            }
+          } else {
+            errors.push(`${file.name}: could not detect report type`)
+          }
+        } catch (e) {
+          errors.push(`${file.name}: ${e instanceof Error ? e.message : String(e)}`)
+        }
+        setProgressCount(i + 1)
       }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+
+      if (mergedMaint) setMaintResult(mergedMaint)
+      if (mergedStock) setStockResult(mergedStock)
+      if (errors.length) setError(errors.join('\n'))
     } finally {
       setLoading(false)
     }
@@ -115,7 +169,8 @@ function SmartRetailSection() {
 
   return (
     <div className="space-y-3">
-      <DropZone onFile={handleFile} loading={loading} label="Drop Smart Retail export here" />
+      <DropZone onFiles={handleFiles} loading={loading} label="Drop Smart Retail exports here" multiple
+        fileCount={fileCount} progressCount={progressCount} />
 
       {error && (
         <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg">
@@ -198,6 +253,12 @@ const SAMPLE_TEXT = `Delivery Note 221209 for 19.1.2026 Purchase Order 1660698
 PHYSICAL LOW FAT MILK CTN 1L 00014584 2 EA 4.92 4.92 2.46000
 PAULS FARMHOUSE GOLD MILK 1.5L 00048186 2 EA 7.22 7.22 3.61000`
 
+type PdfFileResult = {
+  file: string
+  parsed?: ParsedInvoice
+  error?: string
+}
+
 function InvoiceSection() {
   const [pasteText, setPasteText] = useState('')
   const [parsed, setParsed] = useState<ParsedInvoice | null>(null)
@@ -205,14 +266,21 @@ function InvoiceSection() {
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState('')
   const [pdfLoading, setPdfLoading] = useState(false)
+  const [pdfFileCount, setPdfFileCount] = useState(0)
+  const [pdfProgress, setPdfProgress] = useState(0)
   const [showLines, setShowLines] = useState(false)
   const [rawTextPreview, setRawTextPreview] = useState('')
+  // Multi-file batch results
+  const [batchResults, setBatchResults] = useState<PdfFileResult[]>([])
+  const [batchSaveMsg, setBatchSaveMsg] = useState('')
 
   function handleParse() {
     setParseError('')
     setSaveMsg('')
     setParsed(null)
     setRawTextPreview('')
+    setBatchResults([])
+    setBatchSaveMsg('')
     const text = pasteText.trim()
     if (!text) { setParseError('Paste invoice text first.'); return }
     try {
@@ -234,32 +302,85 @@ function InvoiceSection() {
     }
   }
 
-  async function handlePDF(file: File) {
+  async function handlePDFs(files: File[]) {
     setPdfLoading(true)
+    setPdfFileCount(files.length)
+    setPdfProgress(0)
     setParseError('')
     setParsed(null)
     setRawTextPreview('')
-    try {
-      const text = await extractTextFromPDF(file)
-      setPasteText(text)
-      setRawTextPreview(text.slice(0, 1000))
-      // Auto-parse after extraction
-      const result = parseInvoiceText(text)
-      if (!result) {
-        setParseError('Could not extract Document Number from PDF — paste the text manually instead.')
-      } else if (result.lineCount === 0 && result.unparsedLines.length === 0) {
-        setParseError('PDF text extraction produced no line items — paste the text manually instead.')
-      } else {
-        if (result.lineCount === 0) {
-          setParseError('Product codes were found but line items could not be fully parsed — see the warning below.')
+    setBatchResults([])
+    setBatchSaveMsg('')
+    setSaveMsg('')
+
+    // Single file — keep original flow with paste-text + preview
+    if (files.length === 1) {
+      const file = files[0]
+      try {
+        const text = await extractTextFromPDF(file)
+        setPasteText(text)
+        setRawTextPreview(text.slice(0, 1000))
+        const result = parseInvoiceText(text)
+        if (!result) {
+          setParseError('Could not extract Document Number from PDF — paste the text manually instead.')
+        } else if (result.lineCount === 0 && result.unparsedLines.length === 0) {
+          setParseError('PDF text extraction produced no line items — paste the text manually instead.')
+        } else {
+          if (result.lineCount === 0) {
+            setParseError('Product codes were found but line items could not be fully parsed — see the warning below.')
+          }
+          setParsed(result)
         }
-        setParsed(result)
+      } catch (e) {
+        setParseError(`PDF extraction failed: ${e instanceof Error ? e.message : String(e)}. Paste the text manually.`)
+      } finally {
+        setPdfLoading(false)
       }
-    } catch (e) {
-      setParseError(`PDF extraction failed: ${e instanceof Error ? e.message : String(e)}. Paste the text manually.`)
-    } finally {
-      setPdfLoading(false)
+      return
     }
+
+    // Multi-file batch
+    const results: PdfFileResult[] = []
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]
+      try {
+        const text = await extractTextFromPDF(file)
+        const result = parseInvoiceText(text)
+        if (!result) {
+          results.push({ file: file.name, error: 'No Document Number found' })
+        } else if (result.lineCount === 0) {
+          results.push({ file: file.name, error: 'No line items parsed' })
+        } else {
+          results.push({ file: file.name, parsed: result })
+        }
+      } catch (e) {
+        results.push({ file: file.name, error: e instanceof Error ? e.message : String(e) })
+      }
+      setPdfProgress(i + 1)
+    }
+    setBatchResults(results)
+
+    // Auto-save all successfully parsed invoices
+    const successes = results.filter((r) => r.parsed)
+    let saved = 0
+    let skipped = 0
+    const saveErrors: string[] = []
+    for (const r of successes) {
+      try {
+        const res = await saveInvoice(r.parsed!)
+        if (res.saved) saved++
+        else skipped++
+      } catch (e) {
+        saveErrors.push(`${r.file}: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+    const parts: string[] = []
+    if (saved) parts.push(`${saved} invoice${saved > 1 ? 's' : ''} saved`)
+    if (skipped) parts.push(`${skipped} skipped (duplicate)`)
+    if (saveErrors.length) parts.push(`${saveErrors.length} save error${saveErrors.length > 1 ? 's' : ''}`)
+    setBatchSaveMsg(parts.join(', '))
+
+    setPdfLoading(false)
   }
 
   async function handleSave() {
@@ -285,15 +406,63 @@ function InvoiceSection() {
         : 'Credit Adjustment Note'
     : ''
 
+  const batchTotalFiles = batchResults.length
+  const batchSuccessCount = batchResults.filter((r) => r.parsed).length
+  const batchErrorCount = batchResults.filter((r) => r.error).length
+  const batchTotalLines = batchResults.reduce((sum, r) => sum + (r.parsed?.lineCount ?? 0), 0)
+
   return (
     <div className="space-y-3">
       {/* PDF upload */}
       <DropZone
-        onFile={handlePDF}
+        onFiles={handlePDFs}
         loading={pdfLoading}
-        label="Drop Lactalis PDF invoice here"
+        label="Drop Lactalis PDF invoices here"
         accept=".pdf"
+        multiple
+        fileCount={pdfFileCount}
+        progressCount={pdfProgress}
       />
+
+      {/* Batch results */}
+      {batchResults.length > 0 && (
+        <div className="border border-blue-200 rounded-lg overflow-hidden">
+          <div className="bg-blue-50 px-3 py-2">
+            <p className="text-sm font-semibold text-blue-900">
+              Batch Import: {batchTotalFiles} files
+            </p>
+            <p className="text-xs text-blue-700">
+              {batchSuccessCount} parsed · {batchTotalLines} total items
+              {batchErrorCount > 0 && ` · ${batchErrorCount} failed`}
+            </p>
+          </div>
+          <div className="divide-y divide-gray-100 max-h-48 overflow-auto">
+            {batchResults.map((r, i) => (
+              <div key={i} className="px-3 py-1.5 flex items-center gap-2">
+                {r.parsed
+                  ? <CheckCircle size={13} className="text-green-600 shrink-0" />
+                  : <AlertTriangle size={13} className="text-red-500 shrink-0" />}
+                <span className="text-xs text-gray-700 truncate flex-1">{r.file}</span>
+                {r.parsed && (
+                  <span className="text-[11px] text-gray-500 shrink-0">
+                    #{r.parsed.documentNumber} · {r.parsed.lineCount} items
+                  </span>
+                )}
+                {r.error && (
+                  <span className="text-[11px] text-red-600 shrink-0">{r.error}</span>
+                )}
+              </div>
+            ))}
+          </div>
+          {batchSaveMsg && (
+            <div className="px-3 py-2 bg-green-50 border-t border-green-200">
+              <p className="text-xs text-green-800 flex items-center gap-1">
+                <CheckCircle size={12} /> {batchSaveMsg}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="flex items-center gap-2 text-xs text-gray-400">
         <div className="flex-1 h-px bg-gray-200" />
@@ -304,7 +473,7 @@ function InvoiceSection() {
       {/* Paste area */}
       <textarea
         value={pasteText}
-        onChange={(e) => { setPasteText(e.target.value); setParsed(null); setSaveMsg(''); setRawTextPreview('') }}
+        onChange={(e) => { setPasteText(e.target.value); setParsed(null); setSaveMsg(''); setRawTextPreview(''); setBatchResults([]) }}
         placeholder={`Paste invoice text here…\n\nExample:\n${SAMPLE_TEXT}`}
         rows={6}
         className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs font-mono resize-none focus:outline-none focus:ring-1 focus:ring-blue-400"
@@ -339,7 +508,7 @@ function InvoiceSection() {
         </details>
       )}
 
-      {/* Preview */}
+      {/* Preview (single file) */}
       {parsed && (
         <div className="border border-blue-200 rounded-lg overflow-hidden">
           <div className="bg-blue-50 px-3 py-2 flex items-center justify-between">

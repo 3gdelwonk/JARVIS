@@ -27,6 +27,7 @@ import {
   RotateCcw,
   Send,
   ShoppingCart,
+  Trash2,
 } from 'lucide-react'
 import { generateForecasts, getSettings, type Forecast } from '../lib/forecastEngine'
 import { db } from '../lib/db'
@@ -262,12 +263,14 @@ function HistoryView({ onBuild, onViewOrder }: HistoryViewProps) {
           </div>
         ) : (
           orders.map((order) => (
-            <button
+            <div
               key={order.id}
-              onClick={() => onViewOrder(order.id!)}
-              className="w-full text-left px-3 py-3 border-b border-gray-100 flex items-center justify-between gap-3 active:bg-gray-50"
+              className="w-full px-3 py-3 border-b border-gray-100 flex items-center gap-3"
             >
-              <div className="flex-1 min-w-0">
+              <button
+                onClick={() => onViewOrder(order.id!)}
+                className="flex-1 min-w-0 text-left active:bg-gray-50"
+              >
                 <p className="text-sm font-medium text-gray-900">
                   {new Date(order.createdAt).toLocaleDateString('en-AU', {
                     weekday: 'short', day: 'numeric', month: 'short',
@@ -276,11 +279,23 @@ function HistoryView({ onBuild, onViewOrder }: HistoryViewProps) {
                 <p className="text-xs text-gray-500 mt-0.5">
                   ${order.totalCostEstimate.toFixed(2)} est.
                 </p>
-              </div>
+              </button>
               <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${STATUS_BADGE[order.status]}`}>
                 {order.status}
               </span>
-            </button>
+              <button
+                onClick={async (e) => {
+                  e.stopPropagation()
+                  if (!window.confirm('Delete this order?')) return
+                  await db.orderLines.where('orderId').equals(order.id!).delete()
+                  await db.orders.delete(order.id!)
+                }}
+                className="p-1.5 rounded-full hover:bg-red-50 text-gray-400 hover:text-red-500 shrink-0"
+                aria-label="Delete order"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
           ))
         )}
       </div>

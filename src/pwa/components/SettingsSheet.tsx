@@ -237,6 +237,7 @@ export default function SettingsSheet({ onClose }: Props) {
               <p className="text-[11px] text-gray-500 mt-1.5">{backupStatus}</p>
             )}
           </div>
+
         </div>
 
         {/* Footer buttons */}
