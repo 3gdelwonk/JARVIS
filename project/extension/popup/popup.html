@@ -266,9 +266,28 @@
     </button>
   </div>
 
+  <!-- Manual paste load (for orders approved on iPhone) -->
+  <div class="section" id="paste-section">
+    <div class="section-header">
+      <span class="section-label">Load from Phone</span>
+      <button class="section-action" id="paste-toggle">▼ Paste order</button>
+    </div>
+    <div id="paste-body" style="display:none; margin-top:6px;">
+      <input
+        id="paste-input"
+        type="text"
+        placeholder="Paste string from PWA e.g. 19100,18;40248,10"
+        style="width:100%; border:1px solid #d1d5db; border-radius:6px; padding:6px 8px; font-size:11px; font-family:monospace; outline:none;"
+      />
+      <button class="btn btn-primary" id="paste-load-btn" style="margin-top:6px; padding:6px 10px; font-size:11px;">
+        Load Order
+      </button>
+    </div>
+  </div>
+
   <!-- Footer -->
   <div class="footer">
-    <a class="footer-link" href="http://localhost:5173" target="_blank" id="pwa-link">
+    <a class="footer-link" href="https://3gdelwonk.github.io/JARVIS/" target="_blank" id="pwa-link">
       Open PWA ↗
     </a>
     <span class="footer-version">v1.0.0</span>

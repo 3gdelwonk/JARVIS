@@ -7,6 +7,7 @@
   "permissions": ["storage", "activeTab", "scripting", "tabs"],
   "host_permissions": [
     "https://*.lactalis.com.au/*",
+    "https://3gdelwonk.github.io/*",
     "http://localhost:5173/*",
     "http://localhost:4173/*"
   ],
@@ -22,7 +23,11 @@
       "run_at": "document_idle"
     },
     {
-      "matches": ["http://localhost:5173/*", "http://localhost:4173/*"],
+      "matches": [
+        "https://3gdelwonk.github.io/*",
+        "http://localhost:5173/*",
+        "http://localhost:4173/*"
+      ],
       "js": ["content-scripts/pwa-bridge.js"],
       "run_at": "document_idle"
     }

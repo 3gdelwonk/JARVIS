@@ -259,6 +259,51 @@ refreshBtn.addEventListener('click', async () => {
   }
 })
 
+// ─── Manual paste load (orders approved on iPhone) ───────────────────────────
+
+const pasteToggle  = document.getElementById('paste-toggle')
+const pasteBody    = document.getElementById('paste-body')
+const pasteInput   = document.getElementById('paste-input')
+const pasteLoadBtn = document.getElementById('paste-load-btn')
+
+pasteToggle.addEventListener('click', () => {
+  const open = pasteBody.style.display !== 'none'
+  pasteBody.style.display = open ? 'none' : 'block'
+  pasteToggle.textContent = open ? '▼ Paste order' : '▲ Hide'
+})
+
+pasteLoadBtn.addEventListener('click', () => {
+  const raw = pasteInput.value.trim()
+  if (!raw) { showToast('Paste a string first'); return }
+
+  // Format: "19100,18;40248,10;801,3" (semicolon-separated item,qty pairs)
+  const PASTE_RE = /^(\d+,\d+)(;\d+,\d+)*$/
+  if (!PASTE_RE.test(raw)) {
+    showToast('Invalid format — expected: 19100,18;40248,10')
+    return
+  }
+
+  const lines = raw.split(';').map((pair) => {
+    const [itemNumber, qty] = pair.split(',')
+    return { itemNumber, qty: parseInt(qty, 10) }
+  })
+
+  const order = {
+    orderId: null,
+    date: null,
+    approvedAt: new Date().toISOString(),
+    lines,
+  }
+
+  chrome.storage.local.set({ pendingOrder: order }, () => {
+    chrome.runtime.sendMessage({ type: 'PWA_ORDER_SYNC', payload: order })
+    pasteInput.value = ''
+    pasteBody.style.display = 'none'
+    pasteToggle.textContent = '▼ Paste order'
+    showToast(`Loaded ${lines.length} items`)
+  })
+})
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
 async function init() {
