@@ -425,15 +425,15 @@
         right: 20px;
         z-index: 2147483647;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        font-size: 13px;
+        font-size: 14px;
       }
 
       #panel {
         background: #fff;
         border: 1px solid #e5e7eb;
-        border-radius: 12px;
-        box-shadow: 0 8px 30px rgba(0,0,0,0.18);
-        width: 260px;
+        border-radius: 14px;
+        box-shadow: 0 10px 40px rgba(0,0,0,0.20);
+        width: 340px;
         overflow: hidden;
         transition: height 0.2s ease;
       }
@@ -443,22 +443,22 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 9px 12px 8px;
+        padding: 12px 16px 11px;
         background: #1d4ed8;
         color: #fff;
         cursor: pointer;
         user-select: none;
       }
-      #header-title { font-size: 13px; font-weight: 700; }
-      #header-sub   { font-size: 10px; opacity: 0.75; margin-top: 1px; }
+      #header-title { font-size: 15px; font-weight: 700; }
+      #header-sub   { font-size: 11px; opacity: 0.75; margin-top: 2px; }
       #minimise-btn {
         background: rgba(255,255,255,0.2);
         border: none;
         color: #fff;
-        font-size: 14px;
+        font-size: 16px;
         line-height: 1;
-        width: 22px;
-        height: 22px;
+        width: 26px;
+        height: 26px;
         border-radius: 50%;
         cursor: pointer;
         display: flex;
@@ -468,38 +468,38 @@
       }
       #minimise-btn:hover { background: rgba(255,255,255,0.35); }
 
-      #body { padding: 10px 12px 12px; }
+      #body { padding: 14px 16px 16px; }
 
       #summary {
-        font-size: 12px;
+        font-size: 14px;
         color: #374151;
-        margin-bottom: 6px;
+        margin-bottom: 8px;
       }
       #summary strong { color: #1d4ed8; }
 
       #lines-preview {
-        max-height: 100px;
+        max-height: 140px;
         overflow-y: auto;
         border: 1px solid #f3f4f6;
         border-radius: 6px;
-        margin-bottom: 8px;
+        margin-bottom: 10px;
       }
       .line-row {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 3px 7px;
+        padding: 5px 10px;
         border-bottom: 1px solid #f9fafb;
-        font-size: 11px;
+        font-size: 13px;
       }
       .line-row:last-child { border-bottom: none; }
       .line-name { color: #6b7280; }
       .line-qty  { color: #1d4ed8; font-weight: 700; }
 
       #status-bar {
-        font-size: 11px;
-        min-height: 16px;
-        margin-bottom: 8px;
+        font-size: 12px;
+        min-height: 18px;
+        margin-bottom: 10px;
         border-radius: 5px;
         padding: 0;
         transition: background 0.15s;
@@ -512,15 +512,15 @@
       .btn {
         display: block;
         width: 100%;
-        padding: 7px 10px;
-        border-radius: 8px;
+        padding: 9px 12px;
+        border-radius: 9px;
         border: none;
-        font-size: 12px;
+        font-size: 13px;
         font-weight: 600;
         cursor: pointer;
         text-align: center;
         transition: opacity 0.15s, background 0.15s;
-        margin-bottom: 5px;
+        margin-bottom: 6px;
       }
       .btn:last-child { margin-bottom: 0; }
       .btn:disabled { opacity: 0.4; cursor: not-allowed; }
@@ -529,14 +529,14 @@
       .btn-secondary { background: #f3f4f6; color: #374151; }
       .btn-secondary:not(:disabled):hover { background: #e5e7eb; }
       .btn-sm {
-        padding: 4px 8px;
-        font-size: 11px;
+        padding: 5px 10px;
+        font-size: 12px;
         border-radius: 5px;
         border: 1px solid #e5e7eb;
         background: #fff;
         color: #6b7280;
         cursor: pointer;
-        margin-top: 4px;
+        margin-top: 6px;
         width: auto;
         display: inline-block;
       }
@@ -544,12 +544,12 @@
 
       #reminder {
         display: none;
-        margin-top: 8px;
-        padding: 7px 9px;
+        margin-top: 10px;
+        padding: 9px 11px;
         background: #fffbeb;
         border: 1px solid #fcd34d;
-        border-radius: 6px;
-        font-size: 11px;
+        border-radius: 7px;
+        font-size: 12px;
         color: #92400e;
         font-weight: 500;
         line-height: 1.4;
