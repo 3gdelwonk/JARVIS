@@ -683,7 +683,10 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
       </div>
 
       {/* Summary + Approve bar */}
-      <div className="absolute bottom-[49px] left-1/2 -translate-x-1/2 w-full max-w-[480px] bg-white border-t border-gray-200 px-3 py-2.5 shadow-lg z-20">
+      <div
+        className="absolute left-1/2 -translate-x-1/2 w-full max-w-[480px] bg-white border-t border-gray-200 px-3 py-2.5 shadow-lg z-20"
+        style={{ bottom: 'calc(49px + env(safe-area-inset-bottom, 0px))' }}
+      >
         <div className="flex items-center justify-between mb-2">
           <div>
             <p className="text-xs text-gray-500">{totalItems} items · est. cost</p>

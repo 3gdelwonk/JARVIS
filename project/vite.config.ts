@@ -5,6 +5,8 @@ import { VitePWA } from 'vite-plugin-pwa'
 // Set VITE_BASE_PATH env var when deploying to a GitHub Pages sub-path, e.g.:
 //   VITE_BASE_PATH=/iga-milk-manager/ npm run build
 const base = process.env.VITE_BASE_PATH ?? './'
+// PWA start_url must be the absolute sub-path so home screen launch works on GitHub Pages
+const startUrl = process.env.VITE_BASE_PATH ?? './'
 
 export default defineConfig({
   base,
@@ -14,8 +16,7 @@ export default defineConfig({
         manualChunks: {
           xlsx: ['xlsx'],
           pdf: ['pdfjs-dist'],
-          charts: ['recharts'],
-          vendor: ['react', 'react-dom', 'dexie', 'dexie-react-hooks'],
+          vendor: ['react', 'react-dom', 'recharts', 'dexie', 'dexie-react-hooks'],
         },
       },
     },
@@ -31,15 +32,15 @@ export default defineConfig({
         theme_color: '#2563eb',
         background_color: '#ffffff',
         display: 'standalone',
-        start_url: '/',
+        start_url: startUrl,
         icons: [
           {
-            src: '/manifest-icon-192.png',
+            src: './manifest-icon-192.png',
             sizes: '192x192',
             type: 'image/png',
           },
           {
-            src: '/manifest-icon-512.png',
+            src: './manifest-icon-512.png',
             sizes: '512x512',
             type: 'image/png',
           },

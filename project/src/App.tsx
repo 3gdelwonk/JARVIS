@@ -112,7 +112,7 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen max-w-[480px] mx-auto bg-white">
+    <div className="flex flex-col h-screen-safe max-w-[480px] mx-auto bg-white">
       {/* Header */}
       <header className="flex items-center justify-between px-4 py-2.5 border-b border-gray-200 bg-white shrink-0">
         <h1 className="text-base font-semibold text-gray-900">{TAB_TITLES[activeTab]}</h1>
@@ -135,7 +135,7 @@ export default function App() {
         )}
       </main>
 
-      <nav className="flex border-t border-gray-200 bg-white">
+      <nav className="flex border-t border-gray-200 bg-white pb-safe">
         {tabs.map((tab) => (
           <button
             key={tab.id}
