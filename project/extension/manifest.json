@@ -7,6 +7,7 @@
   "permissions": ["storage", "activeTab", "scripting", "tabs"],
   "host_permissions": [
     "https://*.lactalis.com.au/*",
+    "https://mylactalis.com.au/*",
     "https://3gdelwonk.github.io/*",
     "http://localhost:5173/*",
     "http://localhost:4173/*"
@@ -18,7 +19,7 @@
 
   "content_scripts": [
     {
-      "matches": ["https://*.lactalis.com.au/*"],
+      "matches": ["https://*.lactalis.com.au/*", "https://mylactalis.com.au/*"],
       "js": ["content-scripts/main.js", "content-scripts/scheduleScraper.js", "content-scripts/quickOrder.js"],
       "run_at": "document_idle"
     },
