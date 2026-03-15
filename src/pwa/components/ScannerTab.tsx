@@ -509,7 +509,6 @@ function useBarcodeCamera(onDetected: (barcode: string) => void) {
         (result) => {
           if (result && shouldScanRef.current) {
             shouldScanRef.current = false
-            zxingControlsRef.current?.stop()
             onDetectedRef.current(result.getText())
           }
         },
@@ -519,19 +518,14 @@ function useBarcodeCamera(onDetected: (barcode: string) => void) {
   }
 
   function resumeScanning() {
-    if (rafRef.current) cancelAnimationFrame(rafRef.current)
-    zxingControlsRef.current?.stop()
-    zxingControlsRef.current = null
     shouldScanRef.current = true
     if (streamRef.current) {
-      if (videoRef.current && videoRef.current.paused) {
-        videoRef.current.play().catch(() => {})
-      }
       if (nativeBarcodeSupported) {
+        if (rafRef.current) cancelAnimationFrame(rafRef.current)
+        if (videoRef.current?.paused) videoRef.current.play().catch(() => {})
         runDetection()
-      } else {
-        runZxingDetection()
       }
+      // ZXing path: loop is still running — re-enabling shouldScanRef above is enough
     }
   }
 
@@ -817,12 +811,15 @@ function WasteScanner() {
           {!cameraError ? (
             <>
               <video ref={videoRef} className="w-full h-full object-cover" playsInline muted style={isMirrored ? { transform: 'scaleX(-1)' } : undefined} />
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <div className="w-48 h-32 border-2 border-white/60 rounded-xl" />
+              <div className="absolute inset-0 pointer-events-none">
+                <div className="absolute top-[7.5%] left-[7.5%] w-8 h-8 border-t-2 border-l-2 border-white/80 rounded-tl" />
+                <div className="absolute top-[7.5%] right-[7.5%] w-8 h-8 border-t-2 border-r-2 border-white/80 rounded-tr" />
+                <div className="absolute bottom-[7.5%] left-[7.5%] w-8 h-8 border-b-2 border-l-2 border-white/80 rounded-bl" />
+                <div className="absolute bottom-[7.5%] right-[7.5%] w-8 h-8 border-b-2 border-r-2 border-white/80 rounded-br" />
+                <p className="absolute bottom-3 left-0 right-0 text-center text-[11px] text-white/70">
+                  Point camera at any barcode
+                </p>
               </div>
-              <p className="absolute bottom-3 left-0 right-0 text-center text-[11px] text-white/70">
-                Point camera at product barcode
-              </p>
             </>
           ) : (
             <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
@@ -1246,12 +1243,15 @@ function AddToOrderScanner() {
         {!cameraError ? (
           <>
             <video ref={videoRef} className="w-full h-full object-cover" playsInline muted style={isMirrored ? { transform: 'scaleX(-1)' } : undefined} />
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className="w-48 h-32 border-2 border-white/60 rounded-xl" />
+            <div className="absolute inset-0 pointer-events-none">
+              <div className="absolute top-[7.5%] left-[7.5%] w-8 h-8 border-t-2 border-l-2 border-white/80 rounded-tl" />
+              <div className="absolute top-[7.5%] right-[7.5%] w-8 h-8 border-t-2 border-r-2 border-white/80 rounded-tr" />
+              <div className="absolute bottom-[7.5%] left-[7.5%] w-8 h-8 border-b-2 border-l-2 border-white/80 rounded-bl" />
+              <div className="absolute bottom-[7.5%] right-[7.5%] w-8 h-8 border-b-2 border-r-2 border-white/80 rounded-br" />
+              <p className="absolute bottom-3 left-0 right-0 text-center text-[11px] text-white/70">
+                Point camera at a barcode
+              </p>
             </div>
-            <p className="absolute bottom-3 left-0 right-0 text-center text-[11px] text-white/70">
-              Point camera at a barcode
-            </p>
           </>
         ) : (
           <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
