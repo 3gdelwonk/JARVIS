@@ -731,15 +731,28 @@ function AddToOrderScanner() {
 
   async function startCamera() {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+      // Prefer rear camera but fall back to any camera (ideal = soft constraint)
+      let stream: MediaStream
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } })
+      } catch {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true })
+      }
       streamRef.current = stream
       if (videoRef.current) {
         videoRef.current.srcObject = stream
         await videoRef.current.play()
       }
       runDetection()
-    } catch {
-      setCameraError('Camera access denied — use manual entry below')
+    } catch (e) {
+      const name = (e as Error).name
+      if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+        setCameraError('Camera permission denied — grant access in browser settings, or use manual entry below')
+      } else if (name === 'NotFoundError') {
+        setCameraError('No camera found — use manual entry below')
+      } else {
+        setCameraError('Camera unavailable — use manual entry below')
+      }
     }
   }
 
@@ -750,9 +763,12 @@ function AddToOrderScanner() {
   }
 
   function runDetection() {
+    // Cancel any existing loop before starting a new one
+    if (rafRef.current) cancelAnimationFrame(rafRef.current)
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const detector = new (window as any).BarcodeDetector({
-      formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39'],
+      formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'qr_code'],
     })
 
     async function tick() {
@@ -850,8 +866,9 @@ function AddToOrderScanner() {
     setManualInput('')
     setQty(1)
     setAddError('')
-    setScanState('scanning')
+    if (rafRef.current) cancelAnimationFrame(rafRef.current)
     shouldScanRef.current = true
+    setScanState('scanning')
     if (barcodeSupported && streamRef.current) runDetection()
   }
 
