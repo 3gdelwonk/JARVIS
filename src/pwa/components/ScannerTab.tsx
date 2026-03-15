@@ -1,10 +1,11 @@
 /**
  * ScannerTab.tsx
  *
- * Three modes:
+ * Four modes:
  *  A — Invoice Scanner:   photograph a Lactalis invoice → Gemini Vision parses → updates stock
- *  B — Waste Scanner:     photograph thrown-out products → Gemini Vision identifies → log waste
+ *  B — Waste Scanner:     barcode scan (default) or photo AI → log waste
  *  C — Add to Order:      live camera barcode scan → product lookup → add to draft order
+ *  D — Claim Scanner:     fill claim form → open Gmail draft to Lactalis
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -397,9 +398,145 @@ function InvoiceScanner() {
   )
 }
 
+// ─── Shared barcode camera hook ────────────────────────────────────────────────
+
+const nativeBarcodeSupported = typeof (window as { BarcodeDetector?: unknown }).BarcodeDetector !== 'undefined'
+
+function useBarcodeCamera(onDetected: (barcode: string) => void) {
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const rafRef = useRef<number | null>(null)
+  const zxingControlsRef = useRef<{ stop: () => void } | null>(null)
+  const shouldScanRef = useRef(true)
+  const onDetectedRef = useRef(onDetected)
+  const [cameraError, setCameraError] = useState('')
+
+  // Keep callback ref up to date so detectors always call the latest handler
+  useEffect(() => { onDetectedRef.current = onDetected })
+
+  async function startCamera() {
+    setCameraError('')
+    try {
+      let stream: MediaStream
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } })
+      } catch {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true })
+      }
+      streamRef.current = stream
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream
+        await videoRef.current.play()
+      }
+      if (nativeBarcodeSupported) {
+        runDetection()
+      } else {
+        runZxingDetection()
+      }
+    } catch (e) {
+      const name = (e as Error).name
+      if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+        setCameraError('Camera permission denied — grant access in browser settings, or use manual entry below')
+      } else if (name === 'NotFoundError') {
+        setCameraError('No camera found — use manual entry below')
+      } else {
+        setCameraError('Camera unavailable — use manual entry below')
+      }
+    }
+  }
+
+  function stopCamera() {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    zxingControlsRef.current?.stop()
+    zxingControlsRef.current = null
+    streamRef.current?.getTracks().forEach((t) => t.stop())
+    streamRef.current = null
+  }
+
+  function runDetection() {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const detector = new (window as any).BarcodeDetector({
+      formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'qr_code'],
+    })
+    async function tick() {
+      if (!shouldScanRef.current) return
+      const video = videoRef.current
+      if (!video || video.readyState < 2) {
+        rafRef.current = requestAnimationFrame(tick)
+        return
+      }
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const barcodes: any[] = await detector.detect(video)
+        if (barcodes.length > 0 && shouldScanRef.current) {
+          shouldScanRef.current = false
+          onDetectedRef.current(barcodes[0].rawValue)
+          return
+        }
+      } catch { /* detector not ready yet */ }
+      if (shouldScanRef.current) rafRef.current = requestAnimationFrame(tick)
+    }
+    rafRef.current = requestAnimationFrame(tick)
+  }
+
+  async function runZxingDetection() {
+    try {
+      const { BrowserMultiFormatReader } = await import('@zxing/browser')
+      const reader = new BrowserMultiFormatReader()
+      const controls = await reader.decodeFromVideoElement(
+        videoRef.current!,
+        (result) => {
+          if (result && shouldScanRef.current) {
+            shouldScanRef.current = false
+            zxingControlsRef.current?.stop()
+            onDetectedRef.current(result.getText())
+          }
+        },
+      )
+      zxingControlsRef.current = controls
+    } catch { /* ZXing unavailable — manual entry still works */ }
+  }
+
+  function resumeScanning() {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    zxingControlsRef.current?.stop()
+    zxingControlsRef.current = null
+    shouldScanRef.current = true
+    if (streamRef.current) {
+      if (nativeBarcodeSupported) {
+        runDetection()
+      } else {
+        runZxingDetection()
+      }
+    }
+  }
+
+  return { videoRef, cameraError, startCamera, stopCamera, resumeScanning, shouldScanRef, streamRef }
+}
+
 // ─── Waste Scanner (Mode B) ───────────────────────────────────────────────────
 
+type WasteMode = 'barcode' | 'photo'
+type BarcodeScanState = 'scanning' | 'found' | 'notfound' | 'logged'
+
 function WasteScanner() {
+  // ── Shared ──
+  const [wasteMode, setWasteMode] = useState<WasteMode>('barcode')
+
+  // ── Barcode mode state ──
+  const [bcState, setBcState] = useState<BarcodeScanState>('scanning')
+  const [bcBarcode, setBcBarcode] = useState('')
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [bcProduct, setBcProduct] = useState<any | null>(null)
+  const [bcProductName, setBcProductName] = useState('')
+  const [bcQty, setBcQty] = useState(1)
+  const [bcReason, setBcReason] = useState<StagedWasteEntry['reason']>('expired')
+  const [bcDate, setBcDate] = useState(todayStr)
+  const [bcSaving, setBcSaving] = useState(false)
+  const [bcError, setBcError] = useState('')
+
+  // ── Photo mode state ──
   const [image, setImage] = useState<File | null>(null)
   const [preview, setPreview] = useState('')
   const [parsing, setParsing] = useState(false)
@@ -412,6 +549,108 @@ function WasteScanner() {
   const fileRef = useRef<HTMLInputElement>(null)
 
   const products = useLiveQuery(() => db.products.toArray(), [])
+
+  const { videoRef, cameraError, startCamera, stopCamera, resumeScanning, shouldScanRef } =
+    useBarcodeCamera(handleWasteBarcode)
+
+  // Start/stop barcode camera whenever mode switches to/from 'barcode'
+  useEffect(() => {
+    if (wasteMode !== 'barcode') return
+    shouldScanRef.current = true
+    setBcState('scanning')
+    startCamera()
+    return () => {
+      shouldScanRef.current = false
+      stopCamera()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wasteMode])
+
+  // ── Barcode mode handlers ──
+
+  async function handleWasteBarcode(barcode: string) {
+    setBcBarcode(barcode)
+    const found =
+      (await db.products.where('barcode').equals(barcode).first()) ??
+      (await db.products.where('invoiceCode').equals(barcode).first())
+    if (found) {
+      setBcProduct(found)
+      setBcQty(1)
+      setBcReason('expired')
+      setBcDate(todayStr())
+      setBcState('found')
+    } else {
+      setBcProductName('')
+      setBcQty(1)
+      setBcReason('expired')
+      setBcDate(todayStr())
+      setBcState('notfound')
+    }
+  }
+
+  async function logBarcodeWaste() {
+    const productId = bcProduct?.id as number | undefined
+    const productName = (bcProduct?.name ?? bcProductName).trim()
+    if (!productName) { setBcError('Enter a product name'); return }
+    setBcError('')
+    setBcSaving(true)
+    try {
+      const wasteEntry: WasteEntry = {
+        productId: productId ?? 0,
+        productName,
+        quantity: bcQty,
+        wastedDate: bcDate,
+        reason: bcReason,
+      }
+      await db.wasteLog.add(wasteEntry)
+
+      if (productId) {
+        const batches = await db.expiryBatches
+          .where('productId').equals(productId)
+          .filter((b) => b.status === 'active')
+          .toArray()
+        let remaining = bcQty
+        for (const batch of batches.sort((a, b) => a.expiryDate.localeCompare(b.expiryDate))) {
+          if (remaining <= 0) break
+          const deduct = Math.min(batch.quantity, remaining)
+          const newQty = batch.quantity - deduct
+          await db.expiryBatches.update(batch.id!, {
+            quantity: newQty,
+            status: newQty <= 0 ? 'wasted' : 'active',
+          })
+          remaining -= deduct
+        }
+      }
+
+      setBcState('logged')
+      setTimeout(() => {
+        setBcState('scanning')
+        setBcBarcode('')
+        setBcProduct(null)
+        setBcProductName('')
+        setBcQty(1)
+        setBcReason('expired')
+        setBcDate(todayStr())
+        resumeScanning()
+      }, 1200)
+    } catch (e) {
+      setBcError(e instanceof Error ? e.message : 'Save failed')
+    } finally {
+      setBcSaving(false)
+    }
+  }
+
+  function bcScanAgain() {
+    setBcState('scanning')
+    setBcBarcode('')
+    setBcProduct(null)
+    setBcProductName('')
+    setBcQty(1)
+    setBcError('')
+    resumeScanning()
+  }
+
+  // ── Photo mode handlers ──
 
   function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -518,26 +757,195 @@ function WasteScanner() {
     }
   }
 
+  // ── Mode toggle UI ──
+
+  const modeToggle = (
+    <div className="flex bg-gray-100 rounded-xl p-0.5">
+      <button
+        onClick={() => setWasteMode('barcode')}
+        className={`flex-1 text-xs font-medium py-1.5 rounded-lg transition-colors ${
+          wasteMode === 'barcode' ? 'bg-white text-red-600 shadow-sm' : 'text-gray-500'
+        }`}
+      >
+        Barcode Scan
+      </button>
+      <button
+        onClick={() => setWasteMode('photo')}
+        className={`flex-1 text-xs font-medium py-1.5 rounded-lg transition-colors ${
+          wasteMode === 'photo' ? 'bg-white text-red-600 shadow-sm' : 'text-gray-500'
+        }`}
+      >
+        Photo (AI)
+      </button>
+    </div>
+  )
+
+  // ── Barcode mode render ──
+
+  if (wasteMode === 'barcode') {
+    // Brief success flash after logging
+    if (bcState === 'logged') {
+      return (
+        <div className="flex flex-col gap-4 p-4">
+          {modeToggle}
+          <div className="flex flex-col items-center justify-center gap-3 py-10">
+            <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center">
+              <CheckCircle2 size={24} className="text-green-600" />
+            </div>
+            <p className="text-sm font-semibold text-gray-900">Waste logged!</p>
+          </div>
+        </div>
+      )
+    }
+
+    // Product review card (found or not found)
+    if (bcState === 'found' || bcState === 'notfound') {
+      return (
+        <div className="flex flex-col gap-4 p-4">
+          {modeToggle}
+          <div className="bg-white border border-gray-100 rounded-xl p-4 flex flex-col gap-3">
+            {bcState === 'found' && bcProduct ? (
+              <div className="flex items-center gap-3">
+                <div className="relative w-14 h-14 rounded-lg bg-gray-100 overflow-hidden flex items-center justify-center shrink-0">
+                  <ImageOff size={16} className="text-gray-300" />
+                  {bcProduct.imageUrl && (
+                    <img
+                      src={bcProduct.imageUrl}
+                      alt=""
+                      className="absolute inset-0 w-full h-full object-cover"
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+                    />
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-gray-900 truncate">{bcProduct.name}</p>
+                  <p className="text-[11px] text-gray-400">#{bcProduct.invoiceCode}</p>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <AlertCircle size={16} className="text-amber-400 shrink-0" />
+                  <p className="text-sm text-gray-700">Barcode not in database</p>
+                </div>
+                <p className="text-[11px] text-gray-400 font-mono">{bcBarcode}</p>
+                <input
+                  type="text"
+                  placeholder="Product name"
+                  value={bcProductName}
+                  onChange={(e) => setBcProductName(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                />
+              </div>
+            )}
+
+            {/* Qty + Reason + Date */}
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setBcQty((q) => Math.max(1, q - 1))}
+                  className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center text-gray-600"
+                >
+                  <Minus size={12} />
+                </button>
+                <span className="w-8 text-center text-sm font-semibold text-gray-900">{bcQty}</span>
+                <button
+                  onClick={() => setBcQty((q) => q + 1)}
+                  className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center text-gray-600"
+                >
+                  <Plus size={12} />
+                </button>
+              </div>
+              <select
+                value={bcReason}
+                onChange={(e) => setBcReason(e.target.value as StagedWasteEntry['reason'])}
+                className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1.5"
+              >
+                <option value="expired">Expired</option>
+                <option value="damaged">Damaged</option>
+                <option value="other">Other</option>
+              </select>
+              <input
+                type="date"
+                value={bcDate}
+                onChange={(e) => setBcDate(e.target.value)}
+                className="text-xs border border-gray-200 rounded-lg px-2 py-1.5"
+              />
+            </div>
+
+            {bcError && <p className="text-xs text-red-500">{bcError}</p>}
+
+            <div className="flex gap-2">
+              <button
+                onClick={bcScanAgain}
+                className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium"
+              >
+                Scan Again
+              </button>
+              <button
+                onClick={logBarcodeWaste}
+                disabled={bcSaving || (bcState === 'notfound' && !bcProductName.trim())}
+                className="flex-1 py-2.5 bg-red-600 text-white rounded-xl text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {bcSaving && <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+                Log Waste
+              </button>
+            </div>
+          </div>
+        </div>
+      )
+    }
+
+    // bcState === 'scanning'
+    return (
+      <div className="flex flex-col gap-4 p-4">
+        {modeToggle}
+        {!cameraError ? (
+          <div className="relative rounded-2xl overflow-hidden bg-black aspect-video">
+            <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <div className="w-48 h-32 border-2 border-white/60 rounded-xl" />
+            </div>
+            <p className="absolute bottom-3 left-0 right-0 text-center text-[11px] text-white/70">
+              Point camera at product barcode
+            </p>
+          </div>
+        ) : (
+          <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
+            <p className="text-xs text-amber-700">{cameraError}</p>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // ── Photo mode render ──
+
   if (savedCount !== null) {
     return (
-      <div className="flex flex-col items-center justify-center gap-4 py-12 px-6 text-center">
-        <div className="w-14 h-14 rounded-full bg-green-100 flex items-center justify-center">
-          <CheckCircle2 size={28} className="text-green-600" />
+      <div className="flex flex-col gap-4 p-4">
+        {modeToggle}
+        <div className="flex flex-col items-center justify-center gap-4 py-8 text-center">
+          <div className="w-14 h-14 rounded-full bg-green-100 flex items-center justify-center">
+            <CheckCircle2 size={28} className="text-green-600" />
+          </div>
+          <p className="text-base font-semibold text-gray-900">Waste logged!</p>
+          <p className="text-sm text-gray-500">{savedCount} entries saved</p>
+          <button
+            onClick={() => setSavedCount(null)}
+            className="mt-2 bg-blue-600 text-white text-sm font-medium px-6 py-2.5 rounded-xl"
+          >
+            Log More
+          </button>
         </div>
-        <p className="text-base font-semibold text-gray-900">Waste logged!</p>
-        <p className="text-sm text-gray-500">{savedCount} entries saved</p>
-        <button
-          onClick={() => setSavedCount(null)}
-          className="mt-2 bg-blue-600 text-white text-sm font-medium px-6 py-2.5 rounded-xl"
-        >
-          Log More
-        </button>
       </div>
     )
   }
 
   return (
     <div className="flex flex-col gap-4 p-4">
+      {modeToggle}
+
       {/* Session counter */}
       {sessionLog.length > 0 && (
         <div className="bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 flex items-center justify-between">
@@ -705,15 +1113,7 @@ function WasteScanner() {
 
 type ScanState = 'scanning' | 'found' | 'notfound' | 'added'
 
-const nativeBarcodeSupported = typeof (window as { BarcodeDetector?: unknown }).BarcodeDetector !== 'undefined'
-
 function AddToOrderScanner() {
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const streamRef = useRef<MediaStream | null>(null)
-  const rafRef = useRef<number | null>(null)
-  const quaggaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const shouldScanRef = useRef(true)
-
   const [scanState, setScanState] = useState<ScanState>('scanning')
   const [detectedBarcode, setDetectedBarcode] = useState('')
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -721,7 +1121,9 @@ function AddToOrderScanner() {
   const [qty, setQty] = useState(1)
   const [addError, setAddError] = useState('')
   const [manualInput, setManualInput] = useState('')
-  const [cameraError, setCameraError] = useState('')
+
+  const { videoRef, cameraError, startCamera, stopCamera, resumeScanning, shouldScanRef } =
+    useBarcodeCamera(handleBarcode)
 
   useEffect(() => {
     shouldScanRef.current = true
@@ -732,116 +1134,6 @@ function AddToOrderScanner() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  async function startCamera() {
-    try {
-      let stream: MediaStream
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } })
-      } catch {
-        stream = await navigator.mediaDevices.getUserMedia({ video: true })
-      }
-      streamRef.current = stream
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        await videoRef.current.play()
-      }
-      if (nativeBarcodeSupported) {
-        runDetection()
-      } else {
-        runQuaggaDetection()
-      }
-    } catch (e) {
-      const name = (e as Error).name
-      if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
-        setCameraError('Camera permission denied — grant access in browser settings, or use manual entry below')
-      } else if (name === 'NotFoundError') {
-        setCameraError('No camera found — use manual entry below')
-      } else {
-        setCameraError('Camera unavailable — use manual entry below')
-      }
-    }
-  }
-
-  function stopCamera() {
-    if (rafRef.current) cancelAnimationFrame(rafRef.current)
-    if (quaggaTimerRef.current) clearTimeout(quaggaTimerRef.current)
-    streamRef.current?.getTracks().forEach((t) => t.stop())
-    streamRef.current = null
-  }
-
-  function runDetection() {
-    if (rafRef.current) cancelAnimationFrame(rafRef.current)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const detector = new (window as any).BarcodeDetector({
-      formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'qr_code'],
-    })
-    async function tick() {
-      if (!shouldScanRef.current) return
-      const video = videoRef.current
-      if (!video || video.readyState < 2) {
-        rafRef.current = requestAnimationFrame(tick)
-        return
-      }
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const barcodes: any[] = await detector.detect(video)
-        if (barcodes.length > 0 && shouldScanRef.current) {
-          shouldScanRef.current = false
-          await handleBarcode(barcodes[0].rawValue)
-          return
-        }
-      } catch { /* detector not ready yet */ }
-      if (shouldScanRef.current) rafRef.current = requestAnimationFrame(tick)
-    }
-    rafRef.current = requestAnimationFrame(tick)
-  }
-
-  async function runQuaggaDetection() {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const QuaggaMod: any = await import('@ericblade/quagga2')
-      const Quagga = QuaggaMod.default ?? QuaggaMod
-      const canvas = document.createElement('canvas')
-
-      const tick = () => {
-        if (!shouldScanRef.current) return
-        const video = videoRef.current
-        if (!video || video.readyState < 2 || video.paused) {
-          quaggaTimerRef.current = setTimeout(tick, 100)
-          return
-        }
-        canvas.width = video.videoWidth || 640
-        canvas.height = video.videoHeight || 480
-        const ctx = canvas.getContext('2d')
-        if (!ctx) { quaggaTimerRef.current = setTimeout(tick, 100); return }
-        ctx.drawImage(video, 0, 0)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        Quagga.decodeSingle(
-          {
-            src: canvas.toDataURL('image/jpeg', 0.9),
-            numOfWorkers: 0,
-            inputStream: { size: Math.min(canvas.width, 800) },
-            decoder: { readers: ['ean_reader', 'ean_8_reader', 'code_128_reader', 'code_39_reader'] },
-            locate: true,
-          },
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (result: any) => {
-            if (!shouldScanRef.current) return
-            if (result?.codeResult?.code) {
-              shouldScanRef.current = false
-              handleBarcode(result.codeResult.code)
-            } else {
-              quaggaTimerRef.current = setTimeout(tick, 250)
-            }
-          },
-        )
-      }
-      quaggaTimerRef.current = setTimeout(tick, 300)
-    } catch {
-      // Quagga failed to load — manual entry still works
-    }
-  }
 
   async function handleBarcode(barcode: string) {
     setDetectedBarcode(barcode)
@@ -916,18 +1208,8 @@ function AddToOrderScanner() {
     setManualInput('')
     setQty(1)
     setAddError('')
-    if (rafRef.current) cancelAnimationFrame(rafRef.current)
-    if (quaggaTimerRef.current) clearTimeout(quaggaTimerRef.current)
-    shouldScanRef.current = true
     setScanState('scanning')
-    if (streamRef.current) {
-      if (nativeBarcodeSupported) {
-        runDetection()
-      } else {
-        // Let React re-render first so the video element is visible, then restart
-        setTimeout(runQuaggaDetection, 50)
-      }
-    }
+    resumeScanning()
   }
 
   // ── Success state ──────────────────────────────────────────────────────────
@@ -1377,11 +1659,11 @@ export default function ScannerTab() {
           ? <AddToOrderScanner />
           : mode === 'claim'
             ? <ClaimScanner />
-            : !apiKey
-              ? <ApiKeySetup onSave={saveApiKey} />
-              : mode === 'invoice'
-                ? <InvoiceScanner />
-                : <WasteScanner />
+            : mode === 'waste'
+              ? <WasteScanner />
+              : !apiKey
+                ? <ApiKeySetup onSave={saveApiKey} />
+                : <InvoiceScanner />
         }
       </div>
     </div>
