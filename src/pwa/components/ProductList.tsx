@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { ChevronDown, ChevronUp, ExternalLink, Search } from 'lucide-react'
+import { ChevronDown, ChevronUp, ExternalLink, ImageOff, RefreshCw, Search } from 'lucide-react'
 import { db } from '../lib/db'
 import type { Product, StockSnapshot } from '../lib/types'
 
@@ -120,6 +120,13 @@ function ProductRow({ product, qoh }: { product: Product; qoh: number | null }) 
         className="w-full text-left px-3 py-2.5 flex items-start gap-2 active:bg-gray-50"
         onClick={() => setExpanded((v) => !v)}
       >
+        {/* Product image thumbnail */}
+        <div className="w-10 h-10 rounded-lg overflow-hidden bg-gray-100 shrink-0 flex items-center justify-center">
+          {product.imageUrl
+            ? <img src={product.imageUrl} alt={product.name} className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+            : <ImageOff size={14} className="text-gray-300" />
+          }
+        </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-medium text-gray-900 truncate">{product.name}</span>
@@ -228,8 +235,45 @@ function ProductRow({ product, qoh }: { product: Product; qoh: number | null }) 
   )
 }
 
+async function fetchImagesFromOpenFoodFacts(products: Product[]) {
+  let matched = 0
+  for (const p of products) {
+    if (!p.barcode || p.barcode.length < 8) continue
+    try {
+      const res = await fetch(
+        `https://world.openfoodfacts.org/api/v0/product/${p.barcode}.json`,
+        { signal: AbortSignal.timeout(5000) },
+      )
+      if (!res.ok) continue
+      const json = await res.json()
+      const url: string | undefined =
+        json?.product?.image_front_url ||
+        json?.product?.image_url ||
+        json?.product?.image_front_small_url
+      if (url) {
+        await db.products.update(p.id!, { imageUrl: url })
+        matched++
+      }
+    } catch {
+      // network error / timeout — skip
+    }
+  }
+  return matched
+}
+
 export default function ProductList() {
   const [search, setSearch] = useState('')
+  const [fetchingImages, setFetchingImages] = useState(false)
+  const [fetchMsg, setFetchMsg] = useState('')
+
+  async function handleFetchImages(products: Product[]) {
+    setFetchingImages(true)
+    setFetchMsg('')
+    const withBarcodes = products.filter((p) => p.barcode && p.barcode.length >= 8)
+    const matched = await fetchImagesFromOpenFoodFacts(withBarcodes)
+    setFetchMsg(`${matched} / ${withBarcodes.length} images found`)
+    setFetchingImages(false)
+  }
 
   const products = useLiveQuery(() => db.products.toArray(), [])
   const stockMap = useLiveQuery(async () => {
@@ -280,7 +324,18 @@ export default function ProductList() {
             className="w-full pl-8 pr-3 py-1.5 border border-gray-300 rounded-lg text-sm"
           />
         </div>
-        <p className="text-[11px] text-gray-500 mt-1">{filtered.length} of {products.length} products</p>
+        <div className="flex items-center justify-between mt-1">
+          <p className="text-[11px] text-gray-500">{filtered.length} of {products.length} products</p>
+          <button
+            onClick={() => handleFetchImages(products)}
+            disabled={fetchingImages}
+            className="flex items-center gap-1 text-[11px] text-blue-600 disabled:text-gray-400"
+            title="Fetch product images from Open Food Facts"
+          >
+            <RefreshCw size={10} className={fetchingImages ? 'animate-spin' : ''} />
+            {fetchingImages ? 'Fetching…' : fetchMsg || 'Fetch Images'}
+          </button>
+        </div>
       </div>
 
       {/* Product list */}

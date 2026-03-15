@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react'
+import { useLiveQuery } from 'dexie-react-hooks'
 import {
   Upload, FileSpreadsheet, AlertTriangle, CheckCircle,
-  Clock, ChevronDown, ChevronUp, FileText, Eye, Save,
+  Clock, ChevronDown, ChevronUp, FileText, Eye, Save, Package, Database,
 } from 'lucide-react'
 import {
   detectReportType,
@@ -16,11 +17,102 @@ import {
   extractTextFromPDF,
   type ParsedInvoice,
 } from '../lib/invoiceParser'
+import { db } from '../lib/db'
 
 function formatTime(d: Date): string {
   return d.toLocaleString('en-AU', {
     day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
   })
+}
+
+function fmtDate(d: Date | null): string {
+  if (!d) return 'none yet'
+  return d.toLocaleDateString('en-AU', { day: '2-digit', month: '2-digit', year: '2-digit' })
+}
+
+// ─── Data Status ─────────────────────────────────────────────────────────────
+
+function DataStatus() {
+  const status = useLiveQuery(async () => {
+    const [products, snapshots, invoices] = await Promise.all([
+      db.products.toArray(),
+      db.stockSnapshots.toArray(),
+      db.invoiceRecords.toArray(),
+    ])
+    const priced = products.filter((p) => p.lactalisCostPrice > 0)
+    const latestProduct = priced.reduce<Date | null>(
+      (best, p) => (!best || new Date(p.updatedAt) > best ? new Date(p.updatedAt) : best), null,
+    )
+    const latestSnap = snapshots.reduce<Date | null>(
+      (best, s) => (!best || new Date(s.importedAt) > best ? new Date(s.importedAt) : best), null,
+    )
+    const latestInvoice = invoices.reduce<string | null>(
+      (best, i) => (!best || i.invoiceDate > best ? i.invoiceDate : best), null,
+    )
+    return {
+      products: priced.length,
+      latestProduct,
+      snapshots: snapshots.length,
+      latestSnap,
+      invoices: invoices.length,
+      latestInvoice,
+    }
+  }, [])
+
+  if (!status) return null
+
+  const hasData = status.products > 0 || status.snapshots > 0 || status.invoices > 0
+
+  const rows: Array<{ icon: React.ReactNode; label: string; count: number; date: string }> = [
+    {
+      icon: <Package size={13} />,
+      label: 'Products with prices',
+      count: status.products,
+      date: fmtDate(status.latestProduct),
+    },
+    {
+      icon: <Database size={13} />,
+      label: 'Stock snapshots',
+      count: status.snapshots,
+      date: fmtDate(status.latestSnap),
+    },
+    {
+      icon: <FileText size={13} />,
+      label: 'Invoices',
+      count: status.invoices,
+      date: status.latestInvoice
+        ? fmtDate(new Date(status.latestInvoice))
+        : 'none yet',
+    },
+  ]
+
+  return (
+    <div className={`rounded-xl border p-3 mb-4 ${hasData ? 'bg-blue-50 border-blue-100' : 'bg-gray-50 border-gray-200'}`}>
+      <p className={`text-[11px] font-semibold uppercase tracking-wide mb-2 ${hasData ? 'text-blue-600' : 'text-gray-400'}`}>
+        Stored Data
+      </p>
+      {hasData ? (
+        <div className="space-y-1">
+          {rows.map((r) => (
+            <div key={r.label} className="flex items-center gap-1.5 text-xs text-blue-800">
+              <span className={r.count > 0 ? 'text-blue-500' : 'text-gray-300'}>{r.icon}</span>
+              <span className={r.count > 0 ? 'text-blue-900' : 'text-gray-400'}>
+                {r.count > 0 ? `${r.count} ${r.label}` : `No ${r.label.toLowerCase()}`}
+              </span>
+              {r.count > 0 && (
+                <>
+                  <span className="text-blue-300">·</span>
+                  <span className="text-blue-500 text-[11px]">{r.date}</span>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs text-gray-400">No data imported yet — your imports will be saved here permanently.</p>
+      )}
+    </div>
+  )
 }
 
 // ─── Shared Drop Zone ────────────────────────────────────────────────────────
@@ -600,6 +692,7 @@ function InvoiceSection() {
 export default function ImportTab() {
   return (
     <div className="p-4 space-y-6 pb-8">
+      <DataStatus />
       <section>
         <div className="flex items-center gap-2 mb-2">
           <FileSpreadsheet size={18} className="text-green-600" />

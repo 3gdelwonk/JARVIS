@@ -11,6 +11,7 @@
     "deploy": "VITE_BASE_PATH=/${npm_package_name}/ npm run build && gh-pages -d dist"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
     "date-fns": "^3.6.0",
     "dexie": "^4.0.9",
     "dexie-react-hooks": "^1.1.7",

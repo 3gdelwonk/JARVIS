@@ -1,5 +1,5 @@
 import { Component, useEffect, useState, type ReactNode } from 'react'
-import { CalendarClock, LayoutDashboard, ShoppingCart, TrendingUp, Upload, Package, Settings, BarChart3 } from 'lucide-react'
+import { CalendarClock, LayoutDashboard, ShoppingCart, TrendingUp, Upload, Package, Settings, Sparkles } from 'lucide-react'
 import { seedDatabase } from './pwa/lib/db'
 import { applyStatusUpdates, applyExtensionSchedule } from './pwa/lib/extensionSync'
 import Dashboard from './pwa/components/Dashboard'
@@ -7,9 +7,11 @@ import OrderBuilder from './pwa/components/OrderBuilder'
 import MarginAnalysis from './pwa/components/MarginAnalysis'
 import ImportTab from './pwa/components/ImportTab'
 import ProductList from './pwa/components/ProductList'
-import HistoryTab from './pwa/components/HistoryTab'
+import InsightsTab from './pwa/components/InsightsTab'
 import ExpiryTab from './pwa/components/ExpiryTab'
 import SettingsSheet from './pwa/components/SettingsSheet'
+
+const LAST_TAB_KEY = 'milk-manager-last-tab'
 
 // ─── Error boundary ──────────────────────────────────────────────────────────
 
@@ -45,7 +47,7 @@ class ErrorBoundary extends Component<
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-type Tab = 'dashboard' | 'order' | 'expiry' | 'import' | 'products' | 'margins' | 'history'
+type Tab = 'dashboard' | 'order' | 'expiry' | 'import' | 'products' | 'margins' | 'insights'
 
 const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'dashboard', label: 'Home',     icon: <LayoutDashboard size={18} /> },
@@ -54,7 +56,7 @@ const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'import',    label: 'Import',   icon: <Upload size={18} /> },
   { id: 'products',  label: 'Products', icon: <Package size={18} /> },
   { id: 'margins',   label: 'Margins',  icon: <TrendingUp size={18} /> },
-  { id: 'history',   label: 'History',  icon: <BarChart3 size={18} /> },
+  { id: 'insights',  label: 'Insights', icon: <Sparkles size={18} /> },
 ]
 
 const TAB_TITLES: Record<Tab, string> = {
@@ -64,11 +66,14 @@ const TAB_TITLES: Record<Tab, string> = {
   import:    'Import Data',
   products:  'Products',
   margins:   'Margin Analysis',
-  history:   'Invoice History',
+  insights:  'AI Insights',
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<Tab>('dashboard')
+  const [activeTab, setActiveTab] = useState<Tab>(() => {
+    const saved = localStorage.getItem(LAST_TAB_KEY) as Tab | null
+    return saved && tabs.some((t) => t.id === saved) ? saved : 'dashboard'
+  })
   const [showSettings, setShowSettings] = useState(false)
   const [ready, setReady] = useState(false)
 
@@ -96,6 +101,7 @@ export default function App() {
 
   function handleTabChange(tab: Tab) {
     setActiveTab(tab)
+    localStorage.setItem(LAST_TAB_KEY, tab)
     setShowSettings(false)
   }
 
@@ -104,7 +110,7 @@ export default function App() {
       case 'dashboard': return <Dashboard onNavigateToOrder={() => handleTabChange('order')} />
       case 'order':     return <OrderBuilder />
       case 'expiry':    return <ExpiryTab />
-      case 'history':   return <HistoryTab />
+      case 'insights':  return <InsightsTab />
       case 'import':    return <ImportTab />
       case 'products':  return <ProductList />
       case 'margins':   return <MarginAnalysis />

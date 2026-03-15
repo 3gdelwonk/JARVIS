@@ -7,6 +7,7 @@ export interface Product {
   itemNumber: string;
   name: string;
   smartRetailName?: string;
+  imageUrl?: string;
   category: "fresh" | "flavoured" | "uht" | "specialty";
   isGstBearing: boolean;
   active: boolean;
