@@ -9,7 +9,7 @@
  *  5. Recent orders — last 5 with status badges
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import {
   BarChart,
@@ -23,18 +23,14 @@ import {
 import {
   AlertTriangle,
   ArrowRight,
-  Clipboard,
   Clock,
   Download,
   ImageOff,
   Package,
   ShoppingCart,
   TrendingUp,
-  Upload,
-  X,
 } from 'lucide-react'
 import { db } from '../lib/db'
-import { exportAllData, downloadBackup, importAllData } from '../lib/dataExport'
 import { generateForecasts, getSettings, type Forecast } from '../lib/forecastEngine'
 import { analyzeHistory } from '../lib/historyAnalyzer'
 import { AVG_DELIVERY_COST, nextDeliveryDate, friendlyError } from '../lib/constants'
@@ -145,21 +141,9 @@ function SpendTooltip({ active, payload, label }: {
 
 interface Props {
   onNavigateToOrder: () => void
-  onNavigateToImport: () => void
 }
 
-const LAST_BACKUP_KEY = 'milk-manager-last-backup'
-
-function getLastBackupLabel(): string {
-  const raw = localStorage.getItem(LAST_BACKUP_KEY)
-  if (!raw) return 'Never backed up'
-  const diff = Math.floor((Date.now() - new Date(raw).getTime()) / 86400000)
-  if (diff === 0) return 'Backed up today'
-  if (diff === 1) return 'Backed up yesterday'
-  return `Last backup ${diff} days ago`
-}
-
-export default function Dashboard({ onNavigateToOrder, onNavigateToImport }: Props) {
+export default function Dashboard({ onNavigateToOrder }: Props) {
   const [alerts, setAlerts] = useState<Forecast[]>([])
   const [weeklyData, setWeeklyData] = useState<{ week: string; spend: number }[]>([])
   const [totalSpend, setTotalSpend] = useState(0)
@@ -167,74 +151,6 @@ export default function Dashboard({ onNavigateToOrder, onNavigateToImport }: Pro
   const [loadingHistory, setLoadingHistory] = useState(true)
   const [forecastError, setForecastError] = useState<string | null>(null)
   const [historyError, setHistoryError] = useState<string | null>(null)
-  const [backupStatus, setBackupStatus] = useState<string | null>(null)
-  const [backupLabel, setBackupLabel] = useState(() => getLastBackupLabel())
-  const [transferJson, setTransferJson] = useState<string | null>(null)
-  const [hasCopied, setHasCopied] = useState(false)
-  const [pasteMode, setPasteMode] = useState(false)
-  const [pastedText, setPastedText] = useState('')
-  const [pasteError, setPasteError] = useState<string | null>(null)
-  const restoreInputRef = useRef<HTMLInputElement>(null)
-
-  async function handleBackup() {
-    try {
-      setBackupStatus('Exporting…')
-      const json = await exportAllData()
-      const date = new Date().toISOString().slice(0, 10)
-      const filename = `milk-manager-backup-${date}.json`
-      const blob = new Blob([json], { type: 'application/json' })
-      if (navigator.canShare?.({ files: [new File([blob], filename)] })) {
-        await navigator.share({ files: [new File([blob], filename, { type: 'application/json' })], title: 'Milk Manager Backup' })
-        localStorage.setItem(LAST_BACKUP_KEY, new Date().toISOString())
-        setBackupLabel(getLastBackupLabel())
-        setBackupStatus('Shared ✓')
-      } else {
-        downloadBackup(json)
-        localStorage.setItem(LAST_BACKUP_KEY, new Date().toISOString())
-        setBackupLabel(getLastBackupLabel())
-        setBackupStatus('Downloaded ✓')
-        setTransferJson(json)
-      }
-    } catch (e) {
-      if ((e as Error).name !== 'AbortError') setBackupStatus(`Error: ${(e as Error).message}`)
-      else setBackupStatus(null)
-    }
-  }
-
-  async function handleRestoreFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    try {
-      setBackupStatus('Restoring…')
-      await importAllData(await file.text())
-      setBackupStatus('Restore complete')
-    } catch (err) {
-      setBackupStatus(`Restore failed: ${(err as Error).message}`)
-    }
-    e.target.value = ''
-  }
-
-  async function handleCopyJson() {
-    if (!transferJson) return
-    await navigator.clipboard.writeText(transferJson)
-    setHasCopied(true)
-    setTimeout(() => setHasCopied(false), 2000)
-  }
-
-  async function handlePasteImport() {
-    setPasteError(null)
-    try {
-      setBackupStatus('Restoring…')
-      await importAllData(pastedText)
-      setBackupStatus('Restore complete')
-      setPasteMode(false)
-      setPastedText('')
-    } catch (err) {
-      setPasteError(`Import failed: ${(err as Error).message}`)
-      setBackupStatus(null)
-    }
-  }
-
   // Live queries
   const recentOrders = useLiveQuery(
     () => db.orders.orderBy('createdAt').reverse().limit(5).toArray(),
@@ -376,10 +292,6 @@ export default function Dashboard({ onNavigateToOrder, onNavigateToImport }: Pro
           <div>
             <div className="flex items-center gap-2">
               <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Next Delivery</p>
-              <button onClick={onNavigateToImport} title="Import data files"
-                className="p-0.5 rounded hover:bg-white/50 text-gray-400">
-                <Upload size={12} />
-              </button>
             </div>
             <p className={`text-xl font-bold mt-0.5 ${deliveryUrgent ? 'text-amber-700' : 'text-blue-700'}`}>
               {deliveryLabel}
@@ -547,111 +459,6 @@ export default function Dashboard({ onNavigateToOrder, onNavigateToImport }: Pro
           )}
         </div>
       </div>
-
-      {/* ── Backup & Transfer ──────────────────────────────────────────────── */}
-      <div className="mx-3 mt-4">
-        <div className="bg-white rounded-xl border border-gray-100 p-3">
-          <div className="flex items-center justify-between mb-2">
-            <div>
-              <p className="text-sm font-semibold text-gray-800">Backup & Transfer</p>
-              <p className={`text-[11px] mt-0.5 ${backupLabel.startsWith('Never') ? 'text-amber-500' : 'text-gray-400'}`}>
-                {backupLabel}
-              </p>
-            </div>
-          </div>
-          <div className="flex gap-2">
-            <button
-              onClick={handleBackup}
-              className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-blue-600 text-white text-sm font-medium rounded-xl"
-            >
-              <Upload size={14} />
-              Export & Share
-            </button>
-            <button
-              onClick={() => { setPasteMode(false); restoreInputRef.current?.click() }}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 border text-sm rounded-xl ${!pasteMode ? 'border-gray-300 bg-gray-50 text-gray-800 font-medium' : 'border-gray-200 text-gray-700'}`}
-            >
-              <Download size={14} />
-              File
-            </button>
-            <button
-              onClick={() => setPasteMode((m) => !m)}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 border text-sm rounded-xl ${pasteMode ? 'border-blue-400 bg-blue-50 text-blue-700 font-medium' : 'border-gray-200 text-gray-700'}`}
-            >
-              <Clipboard size={14} />
-              Paste
-            </button>
-            <input ref={restoreInputRef} type="file" accept=".json" className="hidden" onChange={handleRestoreFile} />
-          </div>
-          {pasteMode && (
-            <div className="mt-2 space-y-1.5">
-              <textarea
-                value={pastedText}
-                onChange={(e) => setPastedText(e.target.value)}
-                placeholder="Paste JSON backup here…"
-                className="w-full h-24 text-[11px] font-mono border border-gray-200 rounded-lg p-2 resize-none text-gray-700"
-              />
-              {pasteError && <p className="text-[11px] text-red-500">{pasteError}</p>}
-              <button
-                onClick={handlePasteImport}
-                disabled={!pastedText.trim()}
-                className="w-full py-2 bg-blue-600 text-white text-sm font-medium rounded-xl disabled:opacity-40"
-              >
-                Import
-              </button>
-            </div>
-          )}
-          {backupStatus && (
-            <div className="mt-2 flex items-center gap-2">
-              <p className="text-[11px] text-gray-500">{backupStatus}</p>
-              {backupStatus === 'Restore complete' && (
-                <button onClick={() => window.location.reload()}
-                  className="text-[11px] bg-blue-600 text-white px-2 py-0.5 rounded">
-                  Reload App
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ── Transfer to Phone modal ────────────────────────────────────────── */}
-      {transferJson && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setTransferJson(null)}>
-          <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl p-4" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-base font-semibold text-gray-900">Transfer to Phone</p>
-              <button onClick={() => setTransferJson(null)} className="p-1 rounded-full hover:bg-gray-100 text-gray-500">
-                <X size={18} />
-              </button>
-            </div>
-
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Option A — Copy &amp; Paste</p>
-            <textarea
-              readOnly
-              value={transferJson}
-              className="w-full h-16 text-[10px] font-mono border border-gray-200 rounded-lg p-2 resize-none text-gray-500 bg-gray-50"
-            />
-            <button
-              onClick={handleCopyJson}
-              className="mt-1.5 w-full flex items-center justify-center gap-2 py-2.5 bg-blue-600 text-white text-sm font-semibold rounded-xl"
-            >
-              <Clipboard size={15} />
-              {hasCopied ? 'Copied ✓' : 'Copy JSON to Clipboard'}
-            </button>
-            <p className="text-[11px] text-gray-400 mt-1.5">
-              Paste into iMessage, WhatsApp, or email to yourself. Then on your phone: open the app → Backup → Paste.
-            </p>
-
-            <div className="border-t border-gray-100 mt-3 pt-3">
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Option B — File</p>
-              <p className="text-[11px] text-gray-400">
-                File already downloaded. Save it to iCloud Drive or Google Drive, then on your phone: open the app → Backup → Restore → pick the file.
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ── Recent orders ──────────────────────────────────────────────────── */}
       <div className="mx-3 mt-4">

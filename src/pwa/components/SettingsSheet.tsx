@@ -39,24 +39,30 @@ export default function SettingsSheet({ onClose }: Props) {
       const date = new Date().toISOString().slice(0, 10)
       const filename = `milk-manager-backup-${date}.json`
       const blob = new Blob([json], { type: 'application/json' })
-      // Use native share sheet on mobile (iOS/Android)
+
+      let shared = false
       if (navigator.canShare?.({ files: [new File([blob], filename)] })) {
-        const file = new File([blob], filename, { type: 'application/json' })
-        await navigator.share({ files: [file], title: 'Milk Manager Backup' })
-        localStorage.setItem('milk-manager-last-backup', new Date().toISOString())
-        setBackupStatus('Shared ✓')
-      } else {
+        try {
+          await navigator.share({ files: [new File([blob], filename, { type: 'application/json' })], title: 'Milk Manager Backup' })
+          shared = true
+          localStorage.setItem('milk-manager-last-backup', new Date().toISOString())
+          setBackupStatus('Shared ✓')
+        } catch (shareErr) {
+          if ((shareErr as Error).name === 'AbortError') {
+            setBackupStatus(null)
+            return
+          }
+          // Share failed on desktop — fall through to download
+        }
+      }
+      if (!shared) {
         downloadBackup(json)
         localStorage.setItem('milk-manager-last-backup', new Date().toISOString())
         setBackupStatus('Backup downloaded')
         setTransferJson(json)
       }
     } catch (e) {
-      if ((e as Error).name !== 'AbortError') {
-        setBackupStatus(`Error: ${(e as Error).message}`)
-      } else {
-        setBackupStatus(null)
-      }
+      setBackupStatus(`Error: ${(e as Error).message}`)
     }
   }
 
