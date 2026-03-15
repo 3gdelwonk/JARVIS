@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Local env / secrets
+.env
+.env.local
+.env.*.local
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.local
+
+# Stale shadow directory — prevents the project/project/ duplication
+# that occurs when git commits are accidentally made from the parent
+# IGA Milk Order/ directory instead of from project/
+project/
+
+# Lactalis invoice PDFs (real financial documents — never commit)
+Lactalis Invoices/
+*.pdf
