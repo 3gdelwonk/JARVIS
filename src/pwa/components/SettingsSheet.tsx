@@ -31,10 +31,26 @@ export default function SettingsSheet({ onClose }: Props) {
     try {
       setBackupStatus('Exporting…')
       const json = await exportAllData()
-      downloadBackup(json)
-      setBackupStatus('Backup downloaded')
+      const date = new Date().toISOString().slice(0, 10)
+      const filename = `milk-manager-backup-${date}.json`
+      const blob = new Blob([json], { type: 'application/json' })
+      // Use native share sheet on mobile (iOS/Android)
+      if (navigator.canShare?.({ files: [new File([blob], filename)] })) {
+        const file = new File([blob], filename, { type: 'application/json' })
+        await navigator.share({ files: [file], title: 'Milk Manager Backup' })
+        localStorage.setItem('milk-manager-last-backup', new Date().toISOString())
+        setBackupStatus('Shared ✓')
+      } else {
+        downloadBackup(json)
+        localStorage.setItem('milk-manager-last-backup', new Date().toISOString())
+        setBackupStatus('Backup downloaded')
+      }
     } catch (e) {
-      setBackupStatus(`Error: ${(e as Error).message}`)
+      if ((e as Error).name !== 'AbortError') {
+        setBackupStatus(`Error: ${(e as Error).message}`)
+      } else {
+        setBackupStatus(null)
+      }
     }
   }
 
@@ -49,7 +65,7 @@ export default function SettingsSheet({ onClose }: Props) {
       setBackupStatus('Restoring…')
       const text = await file.text()
       await importAllData(text)
-      setBackupStatus('Restore complete — reload to see changes')
+      setBackupStatus('Restore complete')
     } catch (err) {
       setBackupStatus(`Restore failed: ${(err as Error).message}`)
     }
@@ -209,14 +225,15 @@ export default function SettingsSheet({ onClose }: Props) {
 
           {/* Backup / Restore */}
           <div className="border-t border-gray-100 pt-4">
-            <p className="text-sm font-medium text-gray-700 mb-2">Data Backup</p>
+            <p className="text-sm font-medium text-gray-700 mb-0.5">Backup & Transfer</p>
+            <p className="text-[11px] text-gray-400 mb-2">Share your data to any device via AirDrop, Messages, or email</p>
             <div className="flex gap-2">
               <button
                 onClick={handleBackup}
                 className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-700"
               >
                 <Download size={14} />
-                Export Backup
+                Export & Share
               </button>
               <button
                 onClick={handleRestoreClick}
@@ -234,7 +251,17 @@ export default function SettingsSheet({ onClose }: Props) {
               />
             </div>
             {backupStatus && (
-              <p className="text-[11px] text-gray-500 mt-1.5">{backupStatus}</p>
+              <div className="mt-1.5 flex items-center gap-2">
+                <p className="text-[11px] text-gray-500">{backupStatus}</p>
+                {backupStatus === 'Restore complete' && (
+                  <button
+                    onClick={() => window.location.reload()}
+                    className="text-[11px] bg-blue-600 text-white px-2 py-0.5 rounded"
+                  >
+                    Reload App
+                  </button>
+                )}
+              </div>
             )}
           </div>
 

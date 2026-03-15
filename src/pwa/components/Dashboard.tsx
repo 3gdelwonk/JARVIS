@@ -9,7 +9,7 @@
  *  5. Recent orders — last 5 with status badges
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import {
   BarChart,
@@ -32,6 +32,7 @@ import {
   Upload,
 } from 'lucide-react'
 import { db } from '../lib/db'
+import { exportAllData, downloadBackup, importAllData } from '../lib/dataExport'
 import { generateForecasts, getSettings, type Forecast } from '../lib/forecastEngine'
 import { analyzeHistory } from '../lib/historyAnalyzer'
 import { AVG_DELIVERY_COST, nextDeliveryDate, friendlyError } from '../lib/constants'
@@ -145,6 +146,17 @@ interface Props {
   onNavigateToImport: () => void
 }
 
+const LAST_BACKUP_KEY = 'milk-manager-last-backup'
+
+function getLastBackupLabel(): string {
+  const raw = localStorage.getItem(LAST_BACKUP_KEY)
+  if (!raw) return 'Never backed up'
+  const diff = Math.floor((Date.now() - new Date(raw).getTime()) / 86400000)
+  if (diff === 0) return 'Backed up today'
+  if (diff === 1) return 'Backed up yesterday'
+  return `Last backup ${diff} days ago`
+}
+
 export default function Dashboard({ onNavigateToOrder, onNavigateToImport }: Props) {
   const [alerts, setAlerts] = useState<Forecast[]>([])
   const [weeklyData, setWeeklyData] = useState<{ week: string; spend: number }[]>([])
@@ -153,6 +165,46 @@ export default function Dashboard({ onNavigateToOrder, onNavigateToImport }: Pro
   const [loadingHistory, setLoadingHistory] = useState(true)
   const [forecastError, setForecastError] = useState<string | null>(null)
   const [historyError, setHistoryError] = useState<string | null>(null)
+  const [backupStatus, setBackupStatus] = useState<string | null>(null)
+  const [backupLabel, setBackupLabel] = useState(() => getLastBackupLabel())
+  const restoreInputRef = useRef<HTMLInputElement>(null)
+
+  async function handleBackup() {
+    try {
+      setBackupStatus('Exporting…')
+      const json = await exportAllData()
+      const date = new Date().toISOString().slice(0, 10)
+      const filename = `milk-manager-backup-${date}.json`
+      const blob = new Blob([json], { type: 'application/json' })
+      if (navigator.canShare?.({ files: [new File([blob], filename)] })) {
+        await navigator.share({ files: [new File([blob], filename, { type: 'application/json' })], title: 'Milk Manager Backup' })
+        localStorage.setItem(LAST_BACKUP_KEY, new Date().toISOString())
+        setBackupLabel(getLastBackupLabel())
+        setBackupStatus('Shared ✓')
+      } else {
+        downloadBackup(json)
+        localStorage.setItem(LAST_BACKUP_KEY, new Date().toISOString())
+        setBackupLabel(getLastBackupLabel())
+        setBackupStatus('Downloaded ✓')
+      }
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError') setBackupStatus(`Error: ${(e as Error).message}`)
+      else setBackupStatus(null)
+    }
+  }
+
+  async function handleRestoreFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      setBackupStatus('Restoring…')
+      await importAllData(await file.text())
+      setBackupStatus('Restore complete')
+    } catch (err) {
+      setBackupStatus(`Restore failed: ${(err as Error).message}`)
+    }
+    e.target.value = ''
+  }
 
   // Live queries
   const recentOrders = useLiveQuery(
@@ -463,6 +515,48 @@ export default function Dashboard({ onNavigateToOrder, onNavigateToImport }: Pro
                 </div>
               </div>
             ))
+          )}
+        </div>
+      </div>
+
+      {/* ── Backup & Transfer ──────────────────────────────────────────────── */}
+      <div className="mx-3 mt-4">
+        <div className="bg-white rounded-xl border border-gray-100 p-3">
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <p className="text-sm font-semibold text-gray-800">Backup & Transfer</p>
+              <p className={`text-[11px] mt-0.5 ${backupLabel.startsWith('Never') ? 'text-amber-500' : 'text-gray-400'}`}>
+                {backupLabel}
+              </p>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={handleBackup}
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-blue-600 text-white text-sm font-medium rounded-xl"
+            >
+              <Upload size={14} />
+              Export & Share
+            </button>
+            <button
+              onClick={() => restoreInputRef.current?.click()}
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 border border-gray-200 text-sm text-gray-700 rounded-xl"
+            >
+              <Download size={14} />
+              Restore
+            </button>
+            <input ref={restoreInputRef} type="file" accept=".json" className="hidden" onChange={handleRestoreFile} />
+          </div>
+          {backupStatus && (
+            <div className="mt-2 flex items-center gap-2">
+              <p className="text-[11px] text-gray-500">{backupStatus}</p>
+              {backupStatus === 'Restore complete' && (
+                <button onClick={() => window.location.reload()}
+                  className="text-[11px] bg-blue-600 text-white px-2 py-0.5 rounded">
+                  Reload App
+                </button>
+              )}
+            </div>
           )}
         </div>
       </div>
