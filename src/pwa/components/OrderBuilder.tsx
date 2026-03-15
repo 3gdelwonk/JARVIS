@@ -21,6 +21,7 @@ import {
   ChevronUp,
   ClipboardCopy,
   Download,
+  ImageOff,
   Minus,
   Plus,
   RefreshCw,
@@ -126,9 +127,10 @@ interface RowProps {
   forecast: Forecast
   qty: number
   onChange: (id: number, qty: number) => void
+  imageUrl?: string
 }
 
-const ForecastRow = memo(function ForecastRow({ forecast: f, qty, onChange }: RowProps) {
+const ForecastRow = memo(function ForecastRow({ forecast: f, qty, onChange, imageUrl }: RowProps) {
   const [editing, setEditing] = useState(false)
   const [inputVal, setInputVal] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -154,6 +156,12 @@ const ForecastRow = memo(function ForecastRow({ forecast: f, qty, onChange }: Ro
   return (
     <div className="px-3 py-2.5 border-b border-gray-100 last:border-0">
       <div className="flex items-start justify-between gap-2">
+        <div className="w-8 h-8 rounded-md overflow-hidden bg-gray-100 shrink-0 flex items-center justify-center mt-0.5">
+          {imageUrl
+            ? <img src={imageUrl} alt="" className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+            : <ImageOff size={12} className="text-gray-300" />
+          }
+        </div>
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium text-gray-900 leading-snug truncate">{f.productName}</p>
           <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
@@ -525,6 +533,11 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
   const [showOk, setShowOk] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const productImages = useLiveQuery(
+    () => db.products.toArray().then((ps) => new Map(ps.map((p) => [p.id!, p.imageUrl ?? '']))),
+    [],
+  )
+
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
@@ -690,7 +703,7 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
               </button>
 
               {(!isOk || showOk) && items.map((f) => (
-                <ForecastRow key={f.productId} forecast={f} qty={qtys.get(f.productId) ?? 0} onChange={setQty} />
+                <ForecastRow key={f.productId} forecast={f} qty={qtys.get(f.productId) ?? 0} onChange={setQty} imageUrl={productImages?.get(f.productId)} />
               ))}
             </div>
           )

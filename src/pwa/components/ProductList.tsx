@@ -237,28 +237,36 @@ function ProductRow({ product, qoh }: { product: Product; qoh: number | null }) 
 
 async function fetchImagesFromOpenFoodFacts(products: Product[]) {
   let matched = 0
+  let skipped = 0
   for (const p of products) {
     if (!p.barcode || p.barcode.length < 8) continue
-    try {
-      const res = await fetch(
-        `https://world.openfoodfacts.org/api/v0/product/${p.barcode}.json`,
-        { signal: AbortSignal.timeout(5000) },
-      )
-      if (!res.ok) continue
-      const json = await res.json()
-      const url: string | undefined =
-        json?.product?.image_front_url ||
-        json?.product?.image_url ||
-        json?.product?.image_front_small_url
-      if (url) {
-        await db.products.update(p.id!, { imageUrl: url })
+    const url = `https://world.openfoodfacts.org/api/v0/product/${p.barcode}.json`
+    let json: Record<string, unknown> | null = null
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await fetch(url, { signal: AbortSignal.timeout(5000) })
+        if (!res.ok) break
+        json = await res.json()
+        break
+      } catch {
+        if (attempt === 0) await new Promise((r) => setTimeout(r, 1000))
+        else skipped++
+      }
+    }
+    if (json) {
+      const imageUrl: string | undefined =
+        (json as { product?: { image_front_url?: string; image_url?: string; image_front_small_url?: string } })?.product?.image_front_url ||
+        (json as { product?: { image_url?: string } })?.product?.image_url ||
+        (json as { product?: { image_front_small_url?: string } })?.product?.image_front_small_url
+      if (imageUrl) {
+        await db.products.update(p.id!, { imageUrl })
         matched++
       }
-    } catch {
-      // network error / timeout — skip
     }
+    // Rate-limit delay between requests
+    await new Promise((r) => setTimeout(r, 250))
   }
-  return matched
+  return { matched, skipped, total: products.length }
 }
 
 export default function ProductList() {
@@ -270,8 +278,8 @@ export default function ProductList() {
     setFetchingImages(true)
     setFetchMsg('')
     const withBarcodes = products.filter((p) => p.barcode && p.barcode.length >= 8)
-    const matched = await fetchImagesFromOpenFoodFacts(withBarcodes)
-    setFetchMsg(`${matched} / ${withBarcodes.length} images found`)
+    const { matched, skipped, total } = await fetchImagesFromOpenFoodFacts(withBarcodes)
+    setFetchMsg(`${matched} / ${total} found${skipped > 0 ? `, ${skipped} skipped` : ''}`)
     setFetchingImages(false)
   }
 

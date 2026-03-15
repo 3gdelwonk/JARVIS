@@ -24,9 +24,12 @@ import {
   AlertTriangle,
   ArrowRight,
   Clock,
+  Download,
+  ImageOff,
   Package,
   ShoppingCart,
   TrendingUp,
+  Upload,
 } from 'lucide-react'
 import { db } from '../lib/db'
 import { generateForecasts, getSettings, type Forecast } from '../lib/forecastEngine'
@@ -65,13 +68,39 @@ function formatCountdown(targetDate: Date): { label: string; urgent: boolean } {
   }
 }
 
+// ─── Waste CSV export helper ──────────────────────────────────────────────────
+
+function buildWasteCsv(entries: import('../lib/types').WasteEntry[]): string {
+  const rows = entries
+    .sort((a, b) => a.wastedDate.localeCompare(b.wastedDate))
+    .map((w) => `${w.wastedDate},"${w.productName}",${w.quantity},${w.reason},"${w.notes ?? ''}"`)
+  return ['Date,Product,Quantity,Reason,Notes', ...rows].join('\n')
+}
+
+function downloadWasteCsv(entries: import('../lib/types').WasteEntry[]) {
+  const csv = buildWasteCsv(entries)
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `waste-report-${new Date().toISOString().split('T')[0]}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 // ─── Reorder alert row ────────────────────────────────────────────────────────
 
-function AlertRow({ f }: { f: Forecast }) {
+function AlertRow({ f, imageUrl }: { f: Forecast; imageUrl?: string }) {
   const isHot = f.daysUntilStockout !== null && f.daysUntilStockout <= 2
 
   return (
     <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-100 last:border-0">
+      <div className="w-8 h-8 rounded-md overflow-hidden bg-gray-100 shrink-0 flex items-center justify-center">
+        {imageUrl
+          ? <img src={imageUrl} alt="" className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+          : <ImageOff size={12} className="text-gray-300" />
+        }
+      </div>
       <AlertTriangle
         size={13}
         className={isHot ? 'text-red-500 shrink-0' : 'text-amber-400 shrink-0'}
@@ -113,9 +142,10 @@ function SpendTooltip({ active, payload, label }: {
 
 interface Props {
   onNavigateToOrder: () => void
+  onNavigateToImport: () => void
 }
 
-export default function Dashboard({ onNavigateToOrder }: Props) {
+export default function Dashboard({ onNavigateToOrder, onNavigateToImport }: Props) {
   const [alerts, setAlerts] = useState<Forecast[]>([])
   const [weeklyData, setWeeklyData] = useState<{ week: string; spend: number }[]>([])
   const [totalSpend, setTotalSpend] = useState(0)
@@ -129,6 +159,13 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
     () => db.orders.orderBy('createdAt').reverse().limit(5).toArray(),
     [],
   )
+
+  const productImageMap = useLiveQuery(
+    () => db.products.toArray().then((ps) => new Map(ps.map((p) => [p.id!, p.imageUrl ?? '']))),
+    [],
+  )
+
+  const allWasteEntries = useLiveQuery(() => db.wasteLog.toArray(), [])
 
   const nextSlot = useLiveQuery(
     () =>
@@ -230,6 +267,25 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
       ? weeklyData.reduce((s, w) => s + w.spend, 0) / weeklyData.length
       : AVG_DELIVERY_COST * 3
 
+  // ── Weekly waste ─────────────────────────────────────────────────────────
+  const weekStartStr = (() => {
+    const d = new Date()
+    d.setDate(d.getDate() - 6)
+    return d.toISOString().split('T')[0]
+  })()
+  const weekWaste = (allWasteEntries ?? []).filter((w) => w.wastedDate >= weekStartStr)
+  // Group by product name → total qty
+  const wasteByProduct = new Map<string, { qty: number; reason: string }>()
+  for (const w of weekWaste) {
+    const prev = wasteByProduct.get(w.productName)
+    wasteByProduct.set(w.productName, {
+      qty: (prev?.qty ?? 0) + w.quantity,
+      reason: w.reason,
+    })
+  }
+  const wasteSorted = [...wasteByProduct.entries()].sort((a, b) => b[1].qty - a[1].qty)
+  const totalWasteQty = weekWaste.reduce((s, w) => s + w.quantity, 0)
+
   return (
     <div className="flex-1 overflow-auto pb-4">
 
@@ -237,7 +293,13 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
       <div className={`mx-3 mt-3 rounded-xl p-4 ${deliveryUrgent ? 'bg-amber-50 border border-amber-100' : 'bg-blue-50 border border-blue-100'}`}>
         <div className="flex items-start justify-between">
           <div>
-            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Next Delivery</p>
+            <div className="flex items-center gap-2">
+              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Next Delivery</p>
+              <button onClick={onNavigateToImport} title="Import data files"
+                className="p-0.5 rounded hover:bg-white/50 text-gray-400">
+                <Upload size={12} />
+              </button>
+            </div>
             <p className={`text-xl font-bold mt-0.5 ${deliveryUrgent ? 'text-amber-700' : 'text-blue-700'}`}>
               {deliveryLabel}
             </p>
@@ -294,7 +356,7 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
               <p className="text-xs text-gray-400 mt-0.5">No reorders needed right now</p>
             </div>
           ) : (
-            alerts.map((f) => <AlertRow key={f.productId} f={f} />)
+            alerts.map((f) => <AlertRow key={f.productId} f={f} imageUrl={productImageMap?.get(f.productId)} />)
           )}
         </div>
       </div>
@@ -356,6 +418,51 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
                 Weekly avg ${Math.round(chartAvg)} · last {weeklyData.length} weeks
               </p>
             </>
+          )}
+        </div>
+      </div>
+
+      {/* ── Weekly waste ───────────────────────────────────────────────────── */}
+      <div className="mx-3 mt-4">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+              This Week's Waste
+            </p>
+            {totalWasteQty > 0 && (
+              <span className="text-[11px] text-gray-400">{totalWasteQty} units</span>
+            )}
+          </div>
+          <button
+            onClick={() => allWasteEntries && downloadWasteCsv(allWasteEntries)}
+            disabled={!allWasteEntries || allWasteEntries.length === 0}
+            className="flex items-center gap-1 text-[11px] text-blue-600 disabled:text-gray-300"
+            title="Export all waste as CSV"
+          >
+            <Download size={11} />
+            Export Report
+          </button>
+        </div>
+
+        <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+          {wasteSorted.length === 0 ? (
+            <div className="py-5 text-center">
+              <p className="text-xs text-gray-400">No waste logged this week</p>
+            </div>
+          ) : (
+            wasteSorted.map(([name, { qty, reason }]) => (
+              <div key={name} className="flex items-center justify-between px-3 py-2 border-b border-gray-100 last:border-0">
+                <p className="text-sm text-gray-800 truncate flex-1">{name}</p>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                    reason === 'expired' ? 'bg-red-100 text-red-700'
+                    : reason === 'damaged' ? 'bg-amber-100 text-amber-700'
+                    : 'bg-gray-100 text-gray-600'
+                  }`}>{reason}</span>
+                  <span className="text-sm font-semibold text-gray-700">×{qty}</span>
+                </div>
+              </div>
+            ))
           )}
         </div>
       </div>

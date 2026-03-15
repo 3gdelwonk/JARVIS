@@ -1,5 +1,5 @@
 import { Component, useEffect, useState, type ReactNode } from 'react'
-import { CalendarClock, LayoutDashboard, ShoppingCart, TrendingUp, Upload, Package, Settings, Sparkles } from 'lucide-react'
+import { Camera, LayoutDashboard, ShoppingCart, Package, Settings, Sparkles } from 'lucide-react'
 import { seedDatabase } from './pwa/lib/db'
 import { applyStatusUpdates, applyExtensionSchedule } from './pwa/lib/extensionSync'
 import Dashboard from './pwa/components/Dashboard'
@@ -9,6 +9,7 @@ import ImportTab from './pwa/components/ImportTab'
 import ProductList from './pwa/components/ProductList'
 import InsightsTab from './pwa/components/InsightsTab'
 import ExpiryTab from './pwa/components/ExpiryTab'
+import ScannerTab from './pwa/components/ScannerTab'
 import SettingsSheet from './pwa/components/SettingsSheet'
 
 const LAST_TAB_KEY = 'milk-manager-last-tab'
@@ -47,26 +48,25 @@ class ErrorBoundary extends Component<
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-type Tab = 'dashboard' | 'order' | 'expiry' | 'import' | 'products' | 'margins' | 'insights'
+type Tab = 'dashboard' | 'order' | 'scanner' | 'products' | 'insights' | 'expiry' | 'import' | 'margins'
 
 const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'dashboard', label: 'Home',     icon: <LayoutDashboard size={18} /> },
   { id: 'order',     label: 'Order',    icon: <ShoppingCart size={18} /> },
-  { id: 'expiry',    label: 'Expiry',   icon: <CalendarClock size={18} /> },
-  { id: 'import',    label: 'Import',   icon: <Upload size={18} /> },
+  { id: 'scanner',   label: 'Scanner',  icon: <Camera size={18} /> },
   { id: 'products',  label: 'Products', icon: <Package size={18} /> },
-  { id: 'margins',   label: 'Margins',  icon: <TrendingUp size={18} /> },
   { id: 'insights',  label: 'Insights', icon: <Sparkles size={18} /> },
 ]
 
 const TAB_TITLES: Record<Tab, string> = {
   dashboard: 'Milk Manager',
   order:     'Order Builder',
+  scanner:   'Scanner',
+  products:  'Products',
+  insights:  'AI Insights',
   expiry:    'Expiry Tracker',
   import:    'Import Data',
-  products:  'Products',
   margins:   'Margin Analysis',
-  insights:  'AI Insights',
 }
 
 export default function App() {
@@ -107,8 +107,9 @@ export default function App() {
 
   const renderTab = () => {
     switch (activeTab) {
-      case 'dashboard': return <Dashboard onNavigateToOrder={() => handleTabChange('order')} />
+      case 'dashboard': return <Dashboard onNavigateToOrder={() => handleTabChange('order')} onNavigateToImport={() => handleTabChange('import')} />
       case 'order':     return <OrderBuilder />
+      case 'scanner':   return <ScannerTab />
       case 'expiry':    return <ExpiryTab />
       case 'insights':  return <InsightsTab />
       case 'import':    return <ImportTab />
