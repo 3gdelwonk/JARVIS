@@ -419,7 +419,9 @@ function useBarcodeCamera(onDetected: (barcode: string) => void) {
     try {
       let stream: MediaStream
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } })
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        })
       } catch {
         stream = await navigator.mediaDevices.getUserMedia({ video: true })
       }
@@ -427,6 +429,13 @@ function useBarcodeCamera(onDetected: (barcode: string) => void) {
       if (videoRef.current) {
         videoRef.current.srcObject = stream
         await videoRef.current.play()
+      }
+      // Enable continuous autofocus on devices that support it (Chrome/Android).
+      // Silently ignored elsewhere — focusMode is not in TS lib.dom yet, hence the cast.
+      const videoTrack = stream.getVideoTracks()[0]
+      if (videoTrack) {
+        videoTrack.applyConstraints({ advanced: [{ focusMode: 'continuous' } as MediaTrackConstraintSet] })
+          .catch(() => {})
       }
       if (nativeBarcodeSupported) {
         runDetection()
@@ -504,6 +513,9 @@ function useBarcodeCamera(onDetected: (barcode: string) => void) {
     zxingControlsRef.current = null
     shouldScanRef.current = true
     if (streamRef.current) {
+      if (videoRef.current && videoRef.current.paused) {
+        videoRef.current.play().catch(() => {})
+      }
       if (nativeBarcodeSupported) {
         runDetection()
       } else {
@@ -783,26 +795,50 @@ function WasteScanner() {
   // ── Barcode mode render ──
 
   if (wasteMode === 'barcode') {
-    // Brief success flash after logging
-    if (bcState === 'logged') {
-      return (
-        <div className="flex flex-col gap-4 p-4">
-          {modeToggle}
+    // Single return — <video> always stays in DOM so videoRef.current never goes null
+    // between state transitions. Hidden via CSS rather than conditional rendering.
+    return (
+      <div className="flex flex-col gap-4 p-4">
+        {modeToggle}
+
+        {/* Video viewfinder — always mounted, hidden when reviewing a result */}
+        <div className={`relative rounded-2xl overflow-hidden bg-black aspect-video${bcState !== 'scanning' ? ' hidden' : ''}`}>
+          {!cameraError ? (
+            <>
+              <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <div className="w-48 h-32 border-2 border-white/60 rounded-xl" />
+              </div>
+              <p className="absolute bottom-3 left-0 right-0 text-center text-[11px] text-white/70">
+                Point camera at product barcode
+              </p>
+            </>
+          ) : (
+            <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
+              <p className="text-xs text-amber-700">{cameraError}</p>
+            </div>
+          )}
+        </div>
+
+        {/* Camera error shown outside the viewfinder when not scanning */}
+        {bcState !== 'scanning' && cameraError && (
+          <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
+            <p className="text-xs text-amber-700">{cameraError}</p>
+          </div>
+        )}
+
+        {/* Brief success flash after logging */}
+        {bcState === 'logged' && (
           <div className="flex flex-col items-center justify-center gap-3 py-10">
             <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center">
               <CheckCircle2 size={24} className="text-green-600" />
             </div>
             <p className="text-sm font-semibold text-gray-900">Waste logged!</p>
           </div>
-        </div>
-      )
-    }
+        )}
 
-    // Product review card (found or not found)
-    if (bcState === 'found' || bcState === 'notfound') {
-      return (
-        <div className="flex flex-col gap-4 p-4">
-          {modeToggle}
+        {/* Product review card (found or not found) */}
+        {(bcState === 'found' || bcState === 'notfound') && (
           <div className="bg-white border border-gray-100 rounded-xl p-4 flex flex-col gap-3">
             {bcState === 'found' && bcProduct ? (
               <div className="flex items-center gap-3">
@@ -891,28 +927,6 @@ function WasteScanner() {
                 Log Waste
               </button>
             </div>
-          </div>
-        </div>
-      )
-    }
-
-    // bcState === 'scanning'
-    return (
-      <div className="flex flex-col gap-4 p-4">
-        {modeToggle}
-        {!cameraError ? (
-          <div className="relative rounded-2xl overflow-hidden bg-black aspect-video">
-            <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className="w-48 h-32 border-2 border-white/60 rounded-xl" />
-            </div>
-            <p className="absolute bottom-3 left-0 right-0 text-center text-[11px] text-white/70">
-              Point camera at product barcode
-            </p>
-          </div>
-        ) : (
-          <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
-            <p className="text-xs text-amber-700">{cameraError}</p>
           </div>
         )}
       </div>
@@ -1212,102 +1226,108 @@ function AddToOrderScanner() {
     resumeScanning()
   }
 
-  // ── Success state ──────────────────────────────────────────────────────────
-  if (scanState === 'added') {
-    return (
-      <div className="flex flex-col items-center justify-center gap-3 py-12 px-6 text-center">
-        <div className="w-14 h-14 rounded-full bg-green-100 flex items-center justify-center">
-          <CheckCircle2 size={28} className="text-green-600" />
-        </div>
-        <p className="text-base font-semibold text-gray-900">Added to draft order!</p>
-        <p className="text-sm text-gray-500">{product?.name}</p>
-      </div>
-    )
-  }
-
-  // ── Result card (found / not found) ───────────────────────────────────────
-  if (scanState === 'found' || scanState === 'notfound') {
-    return (
-      <div className="flex flex-col gap-4 p-4">
-        {scanState === 'found' && product ? (
-          <div className="bg-white border border-gray-100 rounded-xl p-4 flex flex-col gap-3">
-            <div className="flex items-center gap-3">
-              <div className="relative w-14 h-14 rounded-lg bg-gray-100 overflow-hidden flex items-center justify-center shrink-0">
-                <ImageOff size={16} className="text-gray-300" />
-                {product.imageUrl && (
-                  <img src={product.imageUrl} alt="" className="absolute inset-0 w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
-                )}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-gray-900 truncate">{product.name}</p>
-                <p className="text-[11px] text-gray-400">#{product.invoiceCode}</p>
-                {product.orderUnit && (
-                  <p className="text-[11px] text-gray-400">{product.orderUnit}</p>
-                )}
-              </div>
+  // ── Single return — <video> always stays in DOM so videoRef.current never
+  //    goes null between state transitions. Hidden via CSS, not unmounted. ────
+  return (
+    <div className="flex flex-col gap-4 p-4">
+      {/* Video viewfinder — always mounted, hidden when reviewing a result */}
+      <div className={`relative rounded-2xl overflow-hidden bg-black aspect-video${scanState !== 'scanning' ? ' hidden' : ''}`}>
+        {!cameraError ? (
+          <>
+            <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <div className="w-48 h-32 border-2 border-white/60 rounded-xl" />
             </div>
-            <div className="flex items-center gap-3">
-              <span className="text-xs text-gray-500">Qty:</span>
-              <div className="flex items-center gap-2">
-                <button onClick={() => setQty((q) => Math.max(1, q - 1))}
-                  className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-600">
-                  <Minus size={13} />
-                </button>
-                <span className="w-8 text-center text-sm font-semibold text-gray-900">{qty}</span>
-                <button onClick={() => setQty((q) => q + 1)}
-                  className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-600">
-                  <Plus size={13} />
-                </button>
-              </div>
-            </div>
-            {addError && <p className="text-xs text-red-500">{addError}</p>}
-            <div className="flex gap-2">
-              <button onClick={scanAgain}
-                className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium">
-                Scan Again
-              </button>
-              <button onClick={handleAddToOrder}
-                className="flex-1 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-semibold">
-                Add to Order
-              </button>
-            </div>
-          </div>
+            <p className="absolute bottom-3 left-0 right-0 text-center text-[11px] text-white/70">
+              Point camera at a barcode
+            </p>
+          </>
         ) : (
-          <div className="bg-white border border-gray-100 rounded-xl p-4 flex flex-col gap-3 items-center text-center">
-            <AlertCircle size={28} className="text-amber-400" />
-            <p className="text-sm font-semibold text-gray-900">Product not found</p>
-            <p className="text-xs text-gray-500 font-mono">{detectedBarcode}</p>
-            <button onClick={scanAgain}
-              className="w-full py-2.5 bg-blue-600 text-white rounded-xl text-sm font-semibold">
-              Scan Again
-            </button>
+          <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
+            <p className="text-xs text-amber-700">{cameraError}</p>
           </div>
         )}
       </div>
-    )
-  }
 
-  // ── Scanning state ─────────────────────────────────────────────────────────
-  return (
-    <div className="flex flex-col gap-4 p-4">
-      {!cameraError ? (
-        <div className="relative rounded-2xl overflow-hidden bg-black aspect-video">
-          <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <div className="w-48 h-32 border-2 border-white/60 rounded-xl" />
-          </div>
-          <p className="absolute bottom-3 left-0 right-0 text-center text-[11px] text-white/70">
-            Point camera at a barcode
-          </p>
-        </div>
-      ) : (
+      {/* Camera error shown outside viewfinder when not scanning */}
+      {scanState !== 'scanning' && cameraError && (
         <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
           <p className="text-xs text-amber-700">{cameraError}</p>
         </div>
       )}
 
+      {/* Success flash */}
+      {scanState === 'added' && (
+        <div className="flex flex-col items-center justify-center gap-3 py-12 px-6 text-center">
+          <div className="w-14 h-14 rounded-full bg-green-100 flex items-center justify-center">
+            <CheckCircle2 size={28} className="text-green-600" />
+          </div>
+          <p className="text-base font-semibold text-gray-900">Added to draft order!</p>
+          <p className="text-sm text-gray-500">{product?.name}</p>
+        </div>
+      )}
+
+      {/* Result card — found */}
+      {scanState === 'found' && product && (
+        <div className="bg-white border border-gray-100 rounded-xl p-4 flex flex-col gap-3">
+          <div className="flex items-center gap-3">
+            <div className="relative w-14 h-14 rounded-lg bg-gray-100 overflow-hidden flex items-center justify-center shrink-0">
+              <ImageOff size={16} className="text-gray-300" />
+              {product.imageUrl && (
+                <img src={product.imageUrl} alt="" className="absolute inset-0 w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+              )}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-gray-900 truncate">{product.name}</p>
+              <p className="text-[11px] text-gray-400">#{product.invoiceCode}</p>
+              {product.orderUnit && (
+                <p className="text-[11px] text-gray-400">{product.orderUnit}</p>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-gray-500">Qty:</span>
+            <div className="flex items-center gap-2">
+              <button onClick={() => setQty((q) => Math.max(1, q - 1))}
+                className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-600">
+                <Minus size={13} />
+              </button>
+              <span className="w-8 text-center text-sm font-semibold text-gray-900">{qty}</span>
+              <button onClick={() => setQty((q) => q + 1)}
+                className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-600">
+                <Plus size={13} />
+              </button>
+            </div>
+          </div>
+          {addError && <p className="text-xs text-red-500">{addError}</p>}
+          <div className="flex gap-2">
+            <button onClick={scanAgain}
+              className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium">
+              Scan Again
+            </button>
+            <button onClick={handleAddToOrder}
+              className="flex-1 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-semibold">
+              Add to Order
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Result card — not found */}
+      {scanState === 'notfound' && (
+        <div className="bg-white border border-gray-100 rounded-xl p-4 flex flex-col gap-3 items-center text-center">
+          <AlertCircle size={28} className="text-amber-400" />
+          <p className="text-sm font-semibold text-gray-900">Product not found</p>
+          <p className="text-xs text-gray-500 font-mono">{detectedBarcode}</p>
+          <button onClick={scanAgain}
+            className="w-full py-2.5 bg-blue-600 text-white rounded-xl text-sm font-semibold">
+            Scan Again
+          </button>
+        </div>
+      )}
+
       {/* Manual barcode entry fallback */}
-      <div className="flex gap-2">
+      {scanState === 'scanning' && <div className="flex gap-2">
         <input
           type="text"
           placeholder="Enter barcode manually…"
@@ -1323,7 +1343,7 @@ function AddToOrderScanner() {
         >
           Look Up
         </button>
-      </div>
+      </div>}
     </div>
   )
 }
