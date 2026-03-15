@@ -11,8 +11,11 @@ import { useEffect, useRef, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import {
   AlertCircle,
+  ArrowLeft,
   Camera,
   CheckCircle2,
+  ExternalLink,
+  ImageOff,
   Key,
   Minus,
   Plus,
@@ -702,10 +705,13 @@ function WasteScanner() {
 
 type ScanState = 'scanning' | 'found' | 'notfound' | 'added'
 
+const nativeBarcodeSupported = typeof (window as { BarcodeDetector?: unknown }).BarcodeDetector !== 'undefined'
+
 function AddToOrderScanner() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const rafRef = useRef<number | null>(null)
+  const quaggaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const shouldScanRef = useRef(true)
 
   const [scanState, setScanState] = useState<ScanState>('scanning')
@@ -717,11 +723,9 @@ function AddToOrderScanner() {
   const [manualInput, setManualInput] = useState('')
   const [cameraError, setCameraError] = useState('')
 
-  const barcodeSupported = 'BarcodeDetector' in window
-
   useEffect(() => {
     shouldScanRef.current = true
-    if (barcodeSupported) startCamera()
+    startCamera()
     return () => {
       shouldScanRef.current = false
       stopCamera()
@@ -731,7 +735,6 @@ function AddToOrderScanner() {
 
   async function startCamera() {
     try {
-      // Prefer rear camera but fall back to any camera (ideal = soft constraint)
       let stream: MediaStream
       try {
         stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } })
@@ -743,7 +746,11 @@ function AddToOrderScanner() {
         videoRef.current.srcObject = stream
         await videoRef.current.play()
       }
-      runDetection()
+      if (nativeBarcodeSupported) {
+        runDetection()
+      } else {
+        runQuaggaDetection()
+      }
     } catch (e) {
       const name = (e as Error).name
       if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
@@ -758,19 +765,17 @@ function AddToOrderScanner() {
 
   function stopCamera() {
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    if (quaggaTimerRef.current) clearTimeout(quaggaTimerRef.current)
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
   }
 
   function runDetection() {
-    // Cancel any existing loop before starting a new one
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
-
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const detector = new (window as any).BarcodeDetector({
       formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'qr_code'],
     })
-
     async function tick() {
       if (!shouldScanRef.current) return
       const video = videoRef.current
@@ -789,8 +794,53 @@ function AddToOrderScanner() {
       } catch { /* detector not ready yet */ }
       if (shouldScanRef.current) rafRef.current = requestAnimationFrame(tick)
     }
-
     rafRef.current = requestAnimationFrame(tick)
+  }
+
+  async function runQuaggaDetection() {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const QuaggaMod: any = await import('@ericblade/quagga2')
+      const Quagga = QuaggaMod.default ?? QuaggaMod
+      const canvas = document.createElement('canvas')
+
+      const tick = () => {
+        if (!shouldScanRef.current) return
+        const video = videoRef.current
+        if (!video || video.readyState < 2 || video.paused) {
+          quaggaTimerRef.current = setTimeout(tick, 100)
+          return
+        }
+        canvas.width = video.videoWidth || 640
+        canvas.height = video.videoHeight || 480
+        const ctx = canvas.getContext('2d')
+        if (!ctx) { quaggaTimerRef.current = setTimeout(tick, 100); return }
+        ctx.drawImage(video, 0, 0)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        Quagga.decodeSingle(
+          {
+            src: canvas.toDataURL('image/jpeg', 0.9),
+            numOfWorkers: 0,
+            inputStream: { size: Math.min(canvas.width, 800) },
+            decoder: { readers: ['ean_reader', 'ean_8_reader', 'code_128_reader', 'code_39_reader'] },
+            locate: true,
+          },
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (result: any) => {
+            if (!shouldScanRef.current) return
+            if (result?.codeResult?.code) {
+              shouldScanRef.current = false
+              handleBarcode(result.codeResult.code)
+            } else {
+              quaggaTimerRef.current = setTimeout(tick, 250)
+            }
+          },
+        )
+      }
+      quaggaTimerRef.current = setTimeout(tick, 300)
+    } catch {
+      // Quagga failed to load — manual entry still works
+    }
   }
 
   async function handleBarcode(barcode: string) {
@@ -867,9 +917,17 @@ function AddToOrderScanner() {
     setQty(1)
     setAddError('')
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    if (quaggaTimerRef.current) clearTimeout(quaggaTimerRef.current)
     shouldScanRef.current = true
     setScanState('scanning')
-    if (barcodeSupported && streamRef.current) runDetection()
+    if (streamRef.current) {
+      if (nativeBarcodeSupported) {
+        runDetection()
+      } else {
+        // Let React re-render first so the video element is visible, then restart
+        setTimeout(runQuaggaDetection, 50)
+      }
+    }
   }
 
   // ── Success state ──────────────────────────────────────────────────────────
@@ -892,9 +950,12 @@ function AddToOrderScanner() {
         {scanState === 'found' && product ? (
           <div className="bg-white border border-gray-100 rounded-xl p-4 flex flex-col gap-3">
             <div className="flex items-center gap-3">
-              {product.imageUrl && (
-                <img src={product.imageUrl} alt="" className="w-14 h-14 rounded-lg object-cover bg-gray-100" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
-              )}
+              <div className="relative w-14 h-14 rounded-lg bg-gray-100 overflow-hidden flex items-center justify-center shrink-0">
+                <ImageOff size={16} className="text-gray-300" />
+                {product.imageUrl && (
+                  <img src={product.imageUrl} alt="" className="absolute inset-0 w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+                )}
+              </div>
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-semibold text-gray-900 truncate">{product.name}</p>
                 <p className="text-[11px] text-gray-400">#{product.invoiceCode}</p>
@@ -947,7 +1008,7 @@ function AddToOrderScanner() {
   // ── Scanning state ─────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col gap-4 p-4">
-      {barcodeSupported && !cameraError ? (
+      {!cameraError ? (
         <div className="relative rounded-2xl overflow-hidden bg-black aspect-video">
           <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -959,9 +1020,7 @@ function AddToOrderScanner() {
         </div>
       ) : (
         <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
-          <p className="text-xs text-amber-700">
-            {cameraError || 'BarcodeDetector not supported — use manual entry'}
-          </p>
+          <p className="text-xs text-amber-700">{cameraError}</p>
         </div>
       )}
 
@@ -987,11 +1046,276 @@ function AddToOrderScanner() {
   )
 }
 
+// ─── Claim Scanner (Mode D) ───────────────────────────────────────────────────
+
+type ClaimType = 'damaged' | 'short_delivery' | 'wrong_product' | 'out_of_date'
+
+const CLAIM_TYPE_LABELS: Record<ClaimType, string> = {
+  damaged: 'Damaged in Transit',
+  short_delivery: 'Short Delivery',
+  wrong_product: 'Wrong Product Sent',
+  out_of_date: 'Out of Date / Short-Dated',
+}
+
+const CLAIM_TEMPLATES: Record<ClaimType, string> = {
+  damaged: 'Products arrived damaged and are not fit for sale. Please arrange credit or replacement.',
+  short_delivery: 'We ordered more units than were received. Please issue a credit for the shortage.',
+  wrong_product: 'The incorrect product was delivered. Please arrange collection and send the correct item.',
+  out_of_date: 'Products arrived already expired or with insufficient shelf life for retail sale.',
+}
+
+function ClaimScanner() {
+  const [step, setStep] = useState<'type' | 'details' | 'preview'>('type')
+  const [claimType, setClaimType] = useState<ClaimType | null>(null)
+  const [productName, setProductName] = useState('')
+  const [quantity, setQuantity] = useState('1')
+  const [invoiceRef, setInvoiceRef] = useState('')
+  const [description, setDescription] = useState('')
+  const [image, setImage] = useState<File | null>(null)
+  const [previewUrl, setPreviewUrl] = useState('')
+  const [identifying, setIdentifying] = useState(false)
+  const [identifyError, setIdentifyError] = useState('')
+  const [emailOpened, setEmailOpened] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  const storeName = localStorage.getItem('milk-manager-store-name') || 'IGA Store'
+  const lactalisEmail = localStorage.getItem('milk-manager-lactalis-email') || 'customer.service@lactalis.com.au'
+
+  async function handlePhotoIdentify() {
+    if (!image) return
+    setIdentifying(true)
+    setIdentifyError('')
+    try {
+      const { base64, mediaType } = await imageToBase64(image)
+      const text = await callGeminiVision(
+        'Identify the dairy/milk product in this photo. Return ONLY valid JSON: {"productName": "string"}',
+        base64,
+        mediaType,
+      )
+      const jsonMatch = text.match(/\{[\s\S]*\}/)
+      if (jsonMatch) {
+        const result = JSON.parse(jsonMatch[0])
+        if (result.productName) setProductName(result.productName)
+      }
+    } catch (e) {
+      setIdentifyError(e instanceof Error ? e.message : 'Identify failed')
+    } finally {
+      setIdentifying(false)
+    }
+  }
+
+  function selectClaimType(type: ClaimType) {
+    setClaimType(type)
+    setDescription(CLAIM_TEMPLATES[type])
+    setStep('details')
+  }
+
+  function buildEmailBody() {
+    return `Dear Lactalis Customer Service,
+
+Store: ${storeName}
+Date: ${todayStr()}
+
+Claim Type: ${CLAIM_TYPE_LABELS[claimType!]}
+Product: ${productName}
+Quantity: ${quantity}
+Order/Invoice Reference: ${invoiceRef || 'N/A'}
+
+Details:
+${description}
+
+Please arrange credit or replacement at your earliest convenience.
+
+Kind regards,
+${storeName}`.trim()
+  }
+
+  function openGmail() {
+    const subject = `Product Claim — ${CLAIM_TYPE_LABELS[claimType!]} — ${productName} — ${todayStr()}`
+    const body = buildEmailBody()
+    const url = `https://mail.google.com/mail/u/0/?view=cm&to=${encodeURIComponent(lactalisEmail)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
+    window.open(url, '_blank')
+    db.claimRecords.add({
+      productName,
+      claimType: claimType!,
+      quantity: Number(quantity) || 1,
+      invoiceRef: invoiceRef || undefined,
+      description,
+      emailSentAt: todayStr(),
+      createdAt: todayStr(),
+    })
+    setEmailOpened(true)
+  }
+
+  function resetClaim() {
+    setStep('type')
+    setClaimType(null)
+    setProductName('')
+    setQuantity('1')
+    setInvoiceRef('')
+    setDescription('')
+    setPreviewUrl('')
+    setImage(null)
+    setEmailOpened(false)
+    setIdentifyError('')
+  }
+
+  // Step 1: Select claim type
+  if (step === 'type') {
+    return (
+      <div className="flex flex-col gap-3 p-4">
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Select Claim Type</p>
+        {(Object.entries(CLAIM_TYPE_LABELS) as [ClaimType, string][]).map(([type, label]) => (
+          <button
+            key={type}
+            onClick={() => selectClaimType(type)}
+            className="w-full text-left px-4 py-3 bg-white border border-gray-200 rounded-xl text-sm font-medium text-gray-800 hover:border-blue-300 hover:bg-blue-50 transition-colors"
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+    )
+  }
+
+  // Step 2: Fill details
+  if (step === 'details') {
+    return (
+      <div className="flex flex-col gap-3 p-4">
+        <button onClick={() => setStep('type')} className="flex items-center gap-1 text-xs text-gray-500 self-start">
+          <ArrowLeft size={12} /> Change type
+        </button>
+        <p className="text-xs font-semibold text-gray-700">{CLAIM_TYPE_LABELS[claimType!]}</p>
+
+        {/* Optional photo */}
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0]
+            if (!file) return
+            setImage(file)
+            setPreviewUrl(URL.createObjectURL(file))
+          }}
+        />
+        {!previewUrl ? (
+          <button
+            onClick={() => fileRef.current?.click()}
+            className="w-full h-20 rounded-xl border border-dashed border-gray-300 bg-gray-50 flex items-center justify-center gap-2 text-gray-400 text-xs"
+          >
+            <Camera size={16} /> Take Photo (optional — to identify product)
+          </button>
+        ) : (
+          <div className="relative">
+            <img src={previewUrl} className="w-full rounded-xl object-contain max-h-32" alt="Claim" />
+            <button
+              onClick={() => { setImage(null); setPreviewUrl('') }}
+              className="absolute top-1 right-1 bg-black/50 text-white rounded-full p-1"
+            >
+              <X size={12} />
+            </button>
+            {!productName && (
+              <button
+                onClick={handlePhotoIdentify}
+                disabled={identifying}
+                className="absolute bottom-1 right-1 bg-blue-600 text-white text-xs px-2 py-1 rounded-lg disabled:opacity-50"
+              >
+                {identifying ? 'Identifying…' : 'Identify Product'}
+              </button>
+            )}
+          </div>
+        )}
+        {identifyError && <p className="text-xs text-red-500">{identifyError}</p>}
+
+        {/* Form fields */}
+        <input
+          type="text"
+          placeholder="Product name *"
+          value={productName}
+          onChange={(e) => setProductName(e.target.value)}
+          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+        />
+        <div className="flex gap-2">
+          <input
+            type="number"
+            placeholder="Qty"
+            value={quantity}
+            onChange={(e) => setQuantity(e.target.value)}
+            className="w-20 border border-gray-300 rounded-lg px-3 py-2 text-sm"
+          />
+          <input
+            type="text"
+            placeholder="Invoice/order ref (optional)"
+            value={invoiceRef}
+            onChange={(e) => setInvoiceRef(e.target.value)}
+            className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm"
+          />
+        </div>
+        <textarea
+          rows={3}
+          placeholder="Claim description"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm resize-none"
+        />
+        <button
+          onClick={() => setStep('preview')}
+          disabled={!productName.trim()}
+          className="w-full bg-blue-600 text-white text-sm font-semibold py-3 rounded-xl disabled:opacity-40"
+        >
+          Preview Email
+        </button>
+      </div>
+    )
+  }
+
+  // Step 3: Preview + send
+  return (
+    <div className="flex flex-col gap-3 p-4">
+      <button onClick={() => setStep('details')} className="flex items-center gap-1 text-xs text-gray-500 self-start">
+        <ArrowLeft size={12} /> Edit details
+      </button>
+      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Email Preview</p>
+
+      <div className="bg-gray-50 rounded-xl p-3">
+        <p className="text-[11px] text-gray-400 mb-0.5">To: {lactalisEmail}</p>
+        <p className="text-[11px] font-medium text-gray-700 mb-2">
+          Subject: Product Claim — {CLAIM_TYPE_LABELS[claimType!]} — {productName} — {todayStr()}
+        </p>
+        <pre className="text-xs text-gray-600 whitespace-pre-wrap leading-relaxed font-sans">
+          {buildEmailBody()}
+        </pre>
+      </div>
+
+      {emailOpened ? (
+        <div className="flex flex-col items-center gap-3 py-4">
+          <CheckCircle2 size={28} className="text-green-600" />
+          <p className="text-sm font-medium text-gray-800">Gmail draft opened — review and send</p>
+          <button onClick={resetClaim} className="text-sm text-blue-600">
+            Submit Another Claim
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={openGmail}
+          className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white text-sm font-semibold py-3 rounded-xl"
+        >
+          <ExternalLink size={15} />
+          Open in Gmail
+        </button>
+      )}
+    </div>
+  )
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function ScannerTab() {
   const [apiKey, setApiKey] = useState<string | null>(() => localStorage.getItem(API_KEY_STORAGE))
-  const [mode, setMode] = useState<'invoice' | 'waste' | 'addtoorder'>('invoice')
+  const [mode, setMode] = useState<'invoice' | 'waste' | 'addtoorder' | 'claim'>('invoice')
 
   function saveApiKey(key: string) {
     localStorage.setItem(API_KEY_STORAGE, key)
@@ -1025,10 +1349,18 @@ export default function ScannerTab() {
               mode === 'addtoorder' ? 'bg-white text-green-600 shadow-sm' : 'text-gray-500'
             }`}
           >
-            Add to Order
+            Add Order
+          </button>
+          <button
+            onClick={() => setMode('claim')}
+            className={`flex-1 text-xs font-medium py-1.5 rounded-lg transition-colors ${
+              mode === 'claim' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500'
+            }`}
+          >
+            Claim
           </button>
         </div>
-        {mode !== 'addtoorder' && (
+        {(mode === 'invoice' || mode === 'waste') && (
           <div className="flex items-center justify-end mt-1">
             <button
               onClick={() => { localStorage.removeItem(API_KEY_STORAGE); setApiKey(null) }}
@@ -1043,11 +1375,13 @@ export default function ScannerTab() {
       <div className="flex-1 overflow-auto">
         {mode === 'addtoorder'
           ? <AddToOrderScanner />
-          : !apiKey
-            ? <ApiKeySetup onSave={saveApiKey} />
-            : mode === 'invoice'
-              ? <InvoiceScanner />
-              : <WasteScanner />
+          : mode === 'claim'
+            ? <ClaimScanner />
+            : !apiKey
+              ? <ApiKeySetup onSave={saveApiKey} />
+              : mode === 'invoice'
+                ? <InvoiceScanner />
+                : <WasteScanner />
         }
       </div>
     </div>

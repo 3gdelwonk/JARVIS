@@ -33,6 +33,9 @@ export default function SettingsSheet({ onClose }: Props) {
   const restoreInputRef = useRef<HTMLInputElement>(null)
   const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem('milk-manager-gemini-key') ?? '')
   const [geminiKeySaved, setGeminiKeySaved] = useState(false)
+  const [storeName, setStoreName] = useState(() => localStorage.getItem('milk-manager-store-name') ?? '')
+  const [lactalisEmail, setLactalisEmail] = useState(() => localStorage.getItem('milk-manager-lactalis-email') ?? '')
+  const [storeInfoSaved, setStoreInfoSaved] = useState(false)
 
   async function handleBackup() {
     try {
@@ -295,6 +298,47 @@ export default function SettingsSheet({ onClose }: Props) {
                 </button>
               )}
             </div>
+          </div>
+
+          {/* Store Info */}
+          <div className="border-t border-gray-100 pt-4">
+            <p className="text-sm font-medium text-gray-700 mb-0.5">Store Info</p>
+            <p className="text-[11px] text-gray-400 mb-2">
+              Used when generating claim emails to Lactalis.
+            </p>
+            <div className="flex flex-col gap-2 mb-2">
+              <input
+                type="text"
+                placeholder="Store name (e.g. IGA Camberwell)"
+                value={storeName}
+                onChange={(e) => setStoreName(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+              />
+              <input
+                type="email"
+                placeholder="Lactalis claims email"
+                value={lactalisEmail}
+                onChange={(e) => setLactalisEmail(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+              />
+              {!lactalisEmail && (
+                <p className="text-[11px] text-gray-400">Default: customer.service@lactalis.com.au</p>
+              )}
+            </div>
+            <button
+              onClick={() => {
+                localStorage.setItem('milk-manager-store-name', storeName.trim())
+                localStorage.setItem(
+                  'milk-manager-lactalis-email',
+                  lactalisEmail.trim() || 'customer.service@lactalis.com.au',
+                )
+                setStoreInfoSaved(true)
+                setTimeout(() => setStoreInfoSaved(false), 2000)
+              }}
+              className="w-full py-2 bg-blue-600 text-white text-sm font-medium rounded-lg"
+            >
+              {storeInfoSaved ? 'Saved ✓' : 'Save Store Info'}
+            </button>
           </div>
 
           {/* Backup / Restore */}

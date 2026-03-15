@@ -132,3 +132,15 @@ export interface WasteEntry {
   reason: "expired" | "damaged" | "other";
   notes?: string;
 }
+
+export interface ClaimRecord {
+  id?: number;
+  productId?: number;
+  productName: string;
+  claimType: "damaged" | "short_delivery" | "wrong_product" | "out_of_date";
+  quantity: number;
+  invoiceRef?: string;
+  description: string;
+  emailSentAt?: string;   // YYYY-MM-DD
+  createdAt: string;      // YYYY-MM-DD
+}

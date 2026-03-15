@@ -121,11 +121,11 @@ function ProductRow({ product, qoh }: { product: Product; qoh: number | null }) 
         onClick={() => setExpanded((v) => !v)}
       >
         {/* Product image thumbnail */}
-        <div className="w-10 h-10 rounded-lg overflow-hidden bg-gray-100 shrink-0 flex items-center justify-center">
-          {product.imageUrl
-            ? <img src={product.imageUrl} alt={product.name} className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
-            : <ImageOff size={14} className="text-gray-300" />
-          }
+        <div className="relative w-10 h-10 rounded-lg overflow-hidden bg-gray-100 shrink-0 flex items-center justify-center">
+          <ImageOff size={14} className="text-gray-300" />
+          {product.imageUrl && (
+            <img src={product.imageUrl} alt={product.name} className="absolute inset-0 w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+          )}
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">

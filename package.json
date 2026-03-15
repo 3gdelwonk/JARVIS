@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
+    "@ericblade/quagga2": "^1.12.1",
     "date-fns": "^3.6.0",
     "dexie": "^4.0.9",
     "dexie-react-hooks": "^1.1.7",

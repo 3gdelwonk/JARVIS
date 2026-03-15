@@ -96,11 +96,11 @@ function AlertRow({ f, imageUrl }: { f: Forecast; imageUrl?: string }) {
 
   return (
     <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-100 last:border-0">
-      <div className="w-8 h-8 rounded-md overflow-hidden bg-gray-100 shrink-0 flex items-center justify-center">
-        {imageUrl
-          ? <img src={imageUrl} alt="" className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
-          : <ImageOff size={12} className="text-gray-300" />
-        }
+      <div className="relative w-8 h-8 rounded-md overflow-hidden bg-gray-100 shrink-0 flex items-center justify-center">
+        <ImageOff size={12} className="text-gray-300" />
+        {imageUrl && (
+          <img src={imageUrl} alt="" className="absolute inset-0 w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+        )}
       </div>
       <div className="flex-1 min-w-0">
         <p className="text-sm text-gray-800 truncate">{f.productName}</p>

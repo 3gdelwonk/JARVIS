@@ -156,11 +156,11 @@ const ForecastRow = memo(function ForecastRow({ forecast: f, qty, onChange, imag
   return (
     <div className="px-3 py-2.5 border-b border-gray-100 last:border-0">
       <div className="flex items-start justify-between gap-2">
-        <div className="w-8 h-8 rounded-md overflow-hidden bg-gray-100 shrink-0 flex items-center justify-center mt-0.5">
-          {imageUrl
-            ? <img src={imageUrl} alt="" className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
-            : <ImageOff size={12} className="text-gray-300" />
-          }
+        <div className="relative w-8 h-8 rounded-md overflow-hidden bg-gray-100 shrink-0 flex items-center justify-center mt-0.5">
+          <ImageOff size={12} className="text-gray-300" />
+          {imageUrl && (
+            <img src={imageUrl} alt="" className="absolute inset-0 w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+          )}
         </div>
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium text-gray-900 leading-snug truncate">{f.productName}</p>
@@ -316,9 +316,10 @@ function HistoryView({ onBuild, onViewOrder }: HistoryViewProps) {
 interface ExportViewProps {
   orderId: number
   onBack: () => void
+  onReceive: () => void
 }
 
-function ExportView({ orderId, onBack }: ExportViewProps) {
+function ExportView({ orderId, onBack, onReceive }: ExportViewProps) {
   const [copied, setCopied] = useState<'paste' | 'csv' | null>(null)
   const [submitted, setSubmitted] = useState(false)
   const [statusSaving, setStatusSaving] = useState(false)
@@ -373,15 +374,6 @@ function ExportView({ orderId, onBack }: ExportViewProps) {
     setStatusSaving(true)
     try {
       await db.orders.update(orderId, { status: 'submitted', submittedAt: new Date() })
-    } finally {
-      setStatusSaving(false)
-    }
-  }
-
-  async function markDelivered() {
-    setStatusSaving(true)
-    try {
-      await db.orders.update(orderId, { status: 'delivered' })
     } finally {
       setStatusSaving(false)
     }
@@ -483,11 +475,10 @@ function ExportView({ orderId, onBack }: ExportViewProps) {
             )}
             {order.status === 'submitted' && (
               <button
-                onClick={markDelivered}
-                disabled={statusSaving}
-                className="flex-1 py-2 border border-green-200 text-green-700 text-sm font-medium rounded-xl disabled:opacity-40"
+                onClick={onReceive}
+                className="flex-1 py-2 border border-green-200 text-green-700 text-sm font-medium rounded-xl"
               >
-                {statusSaving ? '…' : 'Mark Delivered'}
+                Receive Order
               </button>
             )}
           </div>
@@ -749,9 +740,187 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
   )
 }
 
+// ─── Receive view ─────────────────────────────────────────────────────────────
+
+interface ReceiveViewProps {
+  orderId: number
+  onBack: () => void
+}
+
+interface ReceiveLine {
+  lineId: number
+  productId: number
+  productName: string
+  approvedQty: number
+  receivedQty: number
+  expiryDate: string
+}
+
+function ReceiveView({ orderId, onBack }: ReceiveViewProps) {
+  const [lines, setLines] = useState<ReceiveLine[]>([])
+  const initialized = useRef(false)
+  const [confirming, setConfirming] = useState(false)
+  const [done, setDone] = useState(false)
+  const [receiveError, setReceiveError] = useState<string | null>(null)
+
+  const orderLines = useLiveQuery(
+    () => db.orderLines.where('orderId').equals(orderId).toArray(),
+    [orderId],
+  )
+
+  useEffect(() => {
+    if (orderLines && !initialized.current) {
+      initialized.current = true
+      setLines(
+        orderLines
+          .filter((l) => l.approvedQty > 0)
+          .map((l) => ({
+            lineId: l.id!,
+            productId: l.productId,
+            productName: l.productName,
+            approvedQty: l.approvedQty,
+            receivedQty: l.approvedQty,
+            expiryDate: '',
+          })),
+      )
+    }
+  }, [orderLines])
+
+  function updateLine(i: number, patch: Partial<ReceiveLine>) {
+    setLines((prev) => prev.map((l, idx) => (idx === i ? { ...l, ...patch } : l)))
+  }
+
+  async function handleConfirm() {
+    setConfirming(true)
+    setReceiveError(null)
+    try {
+      const today = new Date().toISOString().split('T')[0]
+      for (const line of lines) {
+        if (line.receivedQty > 0 && line.expiryDate) {
+          await db.expiryBatches.add({
+            productId: line.productId,
+            productName: line.productName,
+            orderId,
+            quantity: line.receivedQty,
+            expiryDate: line.expiryDate,
+            receivedDate: today,
+            status: 'active',
+          })
+        }
+        await db.orderLines.update(line.lineId, { deliveredQty: line.receivedQty })
+      }
+      await db.orders.update(orderId, { status: 'delivered' })
+      setDone(true)
+    } catch (e) {
+      setReceiveError(e instanceof Error ? e.message : 'Save failed')
+    } finally {
+      setConfirming(false)
+    }
+  }
+
+  if (done) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-4 py-12 px-6 text-center h-full">
+        <div className="w-14 h-14 rounded-full bg-green-100 flex items-center justify-center">
+          <CheckCircle2 size={28} className="text-green-600" />
+        </div>
+        <p className="text-base font-semibold text-gray-900">Order received!</p>
+        <p className="text-sm text-gray-500">Expiry batches saved. Order marked as delivered.</p>
+        <button onClick={onBack} className="mt-2 bg-blue-600 text-white text-sm font-medium px-6 py-2.5 rounded-xl">
+          Done
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-200 bg-white shrink-0">
+        <button onClick={onBack} className="p-1.5 -ml-1 text-gray-500" aria-label="Back">
+          <ArrowLeft size={18} />
+        </button>
+        <div className="flex-1">
+          <p className="text-sm font-semibold text-gray-900">Receive Order</p>
+          <p className="text-[11px] text-gray-400">Enter received quantities and expiry dates</p>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-auto p-3 space-y-3">
+        {lines.length === 0 && (
+          <p className="text-sm text-gray-400 text-center py-8">Loading order lines…</p>
+        )}
+        {lines.map((line, i) => (
+          <div key={line.lineId} className="bg-white border border-gray-100 rounded-xl p-3">
+            <div className="mb-2">
+              <p className="text-sm font-medium text-gray-900">{line.productName}</p>
+              <p className="text-[11px] text-gray-400">Ordered: ×{line.approvedQty}</p>
+            </div>
+            <div className="flex items-center gap-3 mb-2">
+              <span className="text-xs text-gray-500 shrink-0">Received:</span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => updateLine(i, { receivedQty: Math.max(0, line.receivedQty - 1) })}
+                  className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center text-gray-600"
+                >
+                  <Minus size={12} />
+                </button>
+                <span className="w-8 text-center text-sm font-semibold text-gray-900">{line.receivedQty}</span>
+                <button
+                  onClick={() => updateLine(i, { receivedQty: line.receivedQty + 1 })}
+                  className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center text-gray-600"
+                >
+                  <Plus size={12} />
+                </button>
+              </div>
+              {line.receivedQty !== line.approvedQty && (
+                <span className={`text-[11px] font-medium ${line.receivedQty < line.approvedQty ? 'text-amber-600' : 'text-blue-600'}`}>
+                  {line.receivedQty < line.approvedQty
+                    ? `Short ×${line.approvedQty - line.receivedQty}`
+                    : `Extra ×${line.receivedQty - line.approvedQty}`}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-500 shrink-0">Expiry:</span>
+              <input
+                type="date"
+                value={line.expiryDate}
+                onChange={(e) => updateLine(i, { expiryDate: e.target.value })}
+                className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1.5 text-gray-700"
+              />
+              {!line.expiryDate && (
+                <span className="text-[10px] text-gray-300 shrink-0">optional</span>
+              )}
+            </div>
+          </div>
+        ))}
+        {receiveError && (
+          <div className="bg-red-50 border border-red-100 rounded-xl px-3 py-2">
+            <p className="text-xs text-red-600">{receiveError}</p>
+          </div>
+        )}
+      </div>
+
+      <div className="shrink-0 px-3 py-3 border-t border-gray-100 bg-white">
+        <button
+          onClick={handleConfirm}
+          disabled={confirming || lines.length === 0}
+          className="w-full flex items-center justify-center gap-2 bg-green-600 text-white font-semibold py-2.5 rounded-xl disabled:opacity-40"
+        >
+          {confirming ? (
+            <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Saving…</>
+          ) : (
+            <><CheckCircle2 size={16} /> Confirm Receipt</>
+          )}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ─── Root container ───────────────────────────────────────────────────────────
 
-type View = 'history' | 'build' | 'export'
+type View = 'history' | 'build' | 'export' | 'receive'
 
 export default function OrderBuilder() {
   const [view, setView] = useState<View>('history')
@@ -781,6 +950,16 @@ export default function OrderBuilder() {
       <ExportView
         orderId={exportOrderId}
         onBack={() => setView('history')}
+        onReceive={() => setView('receive')}
+      />
+    )
+  }
+
+  if (view === 'receive' && exportOrderId !== null) {
+    return (
+      <ReceiveView
+        orderId={exportOrderId}
+        onBack={() => setView('export')}
       />
     )
   }
