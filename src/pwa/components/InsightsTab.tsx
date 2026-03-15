@@ -1,20 +1,19 @@
 /**
  * InsightsTab.tsx
  *
- * AI-powered chat interface powered by Claude.
+ * AI-powered chat interface powered by Google Gemini 1.5 Flash (free tier).
  * Pulls store data from IndexedDB as context so you can ask natural
  * language questions: waste analysis, invoice lookup, order recommendations,
  * product performance, new product suggestions, etc.
  *
- * API key is stored in localStorage — never sent anywhere except Anthropic.
+ * API key is stored in localStorage — never sent anywhere except Google.
  */
 
 import { useEffect, useRef, useState } from 'react'
-import Anthropic from '@anthropic-ai/sdk'
 import { Key, Send, Sparkles, Trash2, X } from 'lucide-react'
 import { db } from '../lib/db'
 
-const API_KEY_STORAGE = 'milk-manager-api-key'
+const API_KEY_STORAGE = 'milk-manager-gemini-key'
 
 // ─── Data context builder ─────────────────────────────────────────────────────
 
@@ -124,14 +123,18 @@ function ApiKeySetup({ onSave }: { onSave: (key: string) => void }) {
         <Key size={22} className="text-blue-600" />
       </div>
       <div>
-        <p className="text-sm font-semibold text-gray-900">Enter your Anthropic API Key</p>
+        <p className="text-sm font-semibold text-gray-900">Enter your Gemini API Key</p>
         <p className="text-xs text-gray-500 mt-1">
-          Get one at console.anthropic.com — stored only in this browser, never shared.
+          Free at{' '}
+          <a href="https://aistudio.google.com" target="_blank" rel="noopener noreferrer" className="text-blue-500 underline">
+            aistudio.google.com
+          </a>
+          {' '}— stored only in this browser, never shared.
         </p>
       </div>
       <input
         type="password"
-        placeholder="sk-ant-..."
+        placeholder="AIza..."
         value={value}
         onChange={(e) => setValue(e.target.value)}
         className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono"
@@ -218,20 +221,56 @@ export default function InsightsTab() {
 
     try {
       const context = await buildContext()
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true })
+      const systemPrompt = `You are an AI analyst for a small IGA supermarket's milk department. You have access to the store's live data below. Answer questions concisely and helpfully. Use specific numbers from the data. When making recommendations, explain why clearly.\n\n${context}`
 
-      const stream = client.messages.stream({
-        model: 'claude-opus-4-6',
-        max_tokens: 2048,
-        thinking: { type: 'adaptive' },
-        system: `You are an AI analyst for a small IGA supermarket's milk department. You have access to the store's live data below. Answer questions concisely and helpfully. Use specific numbers from the data. When making recommendations, explain why clearly.\n\n${context}`,
-        messages: updatedMessages.map((m) => ({ role: m.role, content: m.content })),
-      })
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent?key=${encodeURIComponent(apiKey)}&alt=sse`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            system_instruction: { parts: [{ text: systemPrompt }] },
+            contents: updatedMessages.map((m) => ({
+              role: m.role === 'assistant' ? 'model' : 'user',
+              parts: [{ text: m.content }],
+            })),
+            generationConfig: { maxOutputTokens: 2048 },
+          }),
+        },
+      )
 
-      for await (const event of stream) {
-        if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-          streamRef.current += event.delta.text
-          setStreamingText(streamRef.current)
+      if (!res.ok) {
+        const errBody = await res.text().catch(() => '')
+        const status = res.status
+        if (status === 400 || status === 401 || status === 403) {
+          throw new Error('Invalid API key — please check and re-enter it.')
+        }
+        if (status === 429) throw new Error('Rate limited — wait a moment and try again.')
+        throw new Error(`Gemini error ${status}: ${errBody.slice(0, 200)}`)
+      }
+
+      const reader = res.body!.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const payload = line.slice(6).trim()
+          if (!payload || payload === '[DONE]') continue
+          try {
+            const json = JSON.parse(payload)
+            const text: string = json.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
+            if (text) {
+              streamRef.current += text
+              setStreamingText(streamRef.current)
+            }
+          } catch { /* malformed chunk */ }
         }
       }
 
@@ -239,14 +278,8 @@ export default function InsightsTab() {
       setMessages((prev) => [...prev, { role: 'assistant', content: finalText }])
       setStreamingText('')
     } catch (e) {
-      if (e instanceof Anthropic.AuthenticationError) {
-        setError('Invalid API key — please check and re-enter it.')
-      } else if (e instanceof Anthropic.RateLimitError) {
-        setError('Rate limited — wait a moment and try again.')
-      } else {
-        setError(e instanceof Error ? e.message : 'Something went wrong.')
-      }
-      setMessages(updatedMessages) // keep user message, remove failed assistant
+      setError(e instanceof Error ? e.message : 'Something went wrong.')
+      setMessages(updatedMessages)
     } finally {
       setLoading(false)
       streamRef.current = ''
@@ -263,7 +296,7 @@ export default function InsightsTab() {
       <div className="flex items-center justify-between px-3 py-2 border-b border-gray-100 shrink-0">
         <div className="flex items-center gap-1.5">
           <Sparkles size={14} className="text-blue-500" />
-          <span className="text-xs text-gray-500">Powered by Claude</span>
+          <span className="text-xs text-gray-500">Powered by Gemini</span>
         </div>
         <div className="flex items-center gap-1">
           {messages.length > 0 && (

@@ -91,3 +91,32 @@ chrome.storage.onChanged.addListener((changes, area) => {
     syncFromExtension()
   }
 })
+
+// ─── Extension status ping / pong ────────────────────────────────────────────
+
+window.addEventListener('milk-manager-ping', () => {
+  chrome.storage.local.get('lactalisTab', (result) => {
+    if (chrome.runtime.lastError) return
+    const loggedIn = !!result.lactalisTab &&
+      (Date.now() - (result.lactalisTab.detectedAt ?? 0)) < 30 * 60_000
+    window.dispatchEvent(new CustomEvent('milk-manager-pong', { detail: { loggedIn } }))
+  })
+})
+
+// ─── Schedule refresh trigger ────────────────────────────────────────────────
+
+window.addEventListener('milk-manager-refresh-schedule', () => {
+  chrome.runtime.sendMessage({ type: 'TRIGGER_SCHEDULE_REFRESH' }, (response) => {
+    if (chrome.runtime.lastError) return
+    console.log('[Milk Manager Bridge] Schedule refresh triggered:', response?.ok)
+  })
+})
+
+// ─── Order submit trigger ─────────────────────────────────────────────────────
+
+window.addEventListener('milk-manager-submit-order', () => {
+  chrome.runtime.sendMessage({ type: 'TRIGGER_ORDER_SUBMIT' }, (response) => {
+    if (chrome.runtime.lastError) return
+    console.log('[Milk Manager Bridge] Order submit triggered:', response?.ok)
+  })
+})

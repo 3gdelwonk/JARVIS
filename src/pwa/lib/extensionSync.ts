@@ -118,3 +118,33 @@ export async function applyExtensionSchedule(): Promise<number> {
 
   return upserted
 }
+
+// ─── Extension status ping ───────────────────────────────────────────────────
+
+/**
+ * Pings pwa-bridge.js to check if the extension is connected and whether a
+ * Lactalis portal tab was active in the last 30 minutes.
+ * Resolves with { connected: false } after 1 s if the bridge doesn't respond.
+ */
+export async function getExtensionStatus(): Promise<{ connected: boolean; lactalisLoggedIn: boolean }> {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => resolve({ connected: false, lactalisLoggedIn: false }), 1000)
+    window.addEventListener('milk-manager-pong', (e: Event) => {
+      clearTimeout(timeout)
+      resolve({ connected: true, lactalisLoggedIn: (e as CustomEvent).detail?.loggedIn ?? false })
+    }, { once: true })
+    window.dispatchEvent(new CustomEvent('milk-manager-ping'))
+  })
+}
+
+// ─── Trigger helpers (fire-and-forget via pwa-bridge.js) ────────────────────
+
+/** Ask the extension to re-scrape the Lactalis delivery schedule. */
+export function triggerScheduleRefresh() {
+  window.dispatchEvent(new CustomEvent('milk-manager-refresh-schedule'))
+}
+
+/** Ask the extension to open the Lactalis Quick Order page and auto-submit. */
+export function triggerOrderSubmit() {
+  window.dispatchEvent(new CustomEvent('milk-manager-submit-order'))
+}

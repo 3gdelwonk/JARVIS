@@ -21,12 +21,12 @@ import {
   ChevronUp,
   ClipboardCopy,
   Download,
+  ExternalLink,
   ImageOff,
   Minus,
   Plus,
   RefreshCw,
   RotateCcw,
-  Send,
   ShoppingCart,
   Trash2,
 } from 'lucide-react'
@@ -320,7 +320,7 @@ interface ExportViewProps {
 
 function ExportView({ orderId, onBack }: ExportViewProps) {
   const [copied, setCopied] = useState<'paste' | 'csv' | null>(null)
-  const [sent, setSent] = useState(false)
+  const [submitted, setSubmitted] = useState(false)
   const [statusSaving, setStatusSaving] = useState(false)
 
   const order = useLiveQuery(() => db.orders.get(orderId), [orderId])
@@ -362,10 +362,11 @@ function ExportView({ orderId, onBack }: ExportViewProps) {
     downloadCsv(csvStr, filename)
   }
 
-  function handleSendToExtension() {
+  function handleSubmitToLactalis() {
     sendToExtension(order as Order, lines as OrderLine[])
-    setSent(true)
-    setTimeout(() => setSent(false), 2500)
+    window.dispatchEvent(new CustomEvent('milk-manager-submit-order'))
+    setSubmitted(true)
+    setTimeout(() => setSubmitted(false), 4000)
   }
 
   async function markSubmitted() {
@@ -451,17 +452,20 @@ function ExportView({ orderId, onBack }: ExportViewProps) {
             </button>
           </div>
 
-          {/* Send to extension */}
+          {/* Submit to Lactalis */}
           <button
-            onClick={handleSendToExtension}
+            onClick={handleSubmitToLactalis}
+            disabled={order.status !== 'approved'}
             className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition-colors ${
-              sent
+              submitted
                 ? 'bg-green-100 text-green-700'
-                : 'bg-blue-600 text-white'
+                : order.status !== 'approved'
+                  ? 'bg-gray-100 text-gray-400'
+                  : 'bg-blue-600 text-white'
             }`}
           >
-            <Send size={15} />
-            {sent ? 'Sent to Extension!' : 'Send to Extension'}
+            <ExternalLink size={15} />
+            {submitted ? 'Opening Lactalis Portal…' : 'Submit to Lactalis'}
           </button>
         </div>
 

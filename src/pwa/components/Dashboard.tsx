@@ -21,12 +21,13 @@ import {
   ReferenceLine,
 } from 'recharts'
 import {
-  AlertTriangle,
   ArrowRight,
   Clock,
   Download,
+  ExternalLink,
   ImageOff,
   Package,
+  RefreshCw,
   ShoppingCart,
   TrendingUp,
 } from 'lucide-react'
@@ -34,6 +35,7 @@ import { db } from '../lib/db'
 import { generateForecasts, getSettings, type Forecast } from '../lib/forecastEngine'
 import { analyzeHistory } from '../lib/historyAnalyzer'
 import { AVG_DELIVERY_COST, nextDeliveryDate, friendlyError } from '../lib/constants'
+import { getExtensionStatus, triggerScheduleRefresh } from '../lib/extensionSync'
 import type { Order } from '../lib/types'
 
 const STATUS_BADGE: Record<Order['status'], string> = {
@@ -100,10 +102,6 @@ function AlertRow({ f, imageUrl }: { f: Forecast; imageUrl?: string }) {
           : <ImageOff size={12} className="text-gray-300" />
         }
       </div>
-      <AlertTriangle
-        size={13}
-        className={isHot ? 'text-red-500 shrink-0' : 'text-amber-400 shrink-0'}
-      />
       <div className="flex-1 min-w-0">
         <p className="text-sm text-gray-800 truncate">{f.productName}</p>
         <p className="text-[11px] text-gray-400">
@@ -151,6 +149,8 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
   const [loadingHistory, setLoadingHistory] = useState(true)
   const [forecastError, setForecastError] = useState<string | null>(null)
   const [historyError, setHistoryError] = useState<string | null>(null)
+  const [extStatus, setExtStatus] = useState<{ connected: boolean; lactalisLoggedIn: boolean } | null>(null)
+  const [refreshingSchedule, setRefreshingSchedule] = useState(false)
   // Live queries
   const recentOrders = useLiveQuery(
     () => db.orders.orderBy('createdAt').reverse().limit(5).toArray(),
@@ -228,6 +228,20 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
       .finally(() => { if (!cancelled) setLoadingHistory(false) })
     return () => { cancelled = true }
   }, [])
+
+  // Async: extension status check on mount
+  useEffect(() => {
+    getExtensionStatus().then(setExtStatus)
+  }, [])
+
+  async function handleRefreshSchedule() {
+    setRefreshingSchedule(true)
+    triggerScheduleRefresh()
+    setTimeout(async () => {
+      setExtStatus(await getExtensionStatus())
+      setRefreshingSchedule(false)
+    }, 3000)
+  }
 
   // ── Next delivery display ──────────────────────────────────────────────────
 
@@ -309,6 +323,44 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
             <Package size={22} className={deliveryUrgent ? 'text-amber-600' : 'text-blue-600'} />
           </div>
         </div>
+
+        {/* Extension status */}
+        {extStatus !== null && (
+          <div className="flex items-center justify-between mt-2">
+            <div className="flex items-center gap-1.5">
+              <div className={`w-1.5 h-1.5 rounded-full ${
+                extStatus.connected
+                  ? extStatus.lactalisLoggedIn ? 'bg-green-500' : 'bg-amber-400'
+                  : 'bg-gray-300'
+              }`} />
+              <span className="text-[11px] text-gray-500">
+                {extStatus.connected
+                  ? extStatus.lactalisLoggedIn ? 'Lactalis live' : 'Extension connected'
+                  : 'Extension not found'}
+              </span>
+            </div>
+            {extStatus.connected ? (
+              <button
+                onClick={handleRefreshSchedule}
+                disabled={refreshingSchedule}
+                className="flex items-center gap-1 text-[11px] text-blue-600 disabled:text-gray-400"
+              >
+                <RefreshCw size={10} className={refreshingSchedule ? 'animate-spin' : ''} />
+                Refresh Schedule
+              </button>
+            ) : (
+              <a
+                href="https://my.lactalis.com.au"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 text-[11px] text-blue-600"
+              >
+                <ExternalLink size={10} />
+                Open Portal
+              </a>
+            )}
+          </div>
+        )}
 
         {/* Quick action */}
         <button

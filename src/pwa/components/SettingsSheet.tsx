@@ -31,6 +31,8 @@ export default function SettingsSheet({ onClose }: Props) {
   const [pastedText, setPastedText] = useState('')
   const [pasteError, setPasteError] = useState<string | null>(null)
   const restoreInputRef = useRef<HTMLInputElement>(null)
+  const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem('milk-manager-gemini-key') ?? '')
+  const [geminiKeySaved, setGeminiKeySaved] = useState(false)
 
   async function handleBackup() {
     try {
@@ -254,6 +256,45 @@ export default function SettingsSheet({ onClose }: Props) {
               <br />
               × {s.globalMultiplier.toFixed(2)} global
             </p>
+          </div>
+
+          {/* Gemini API Key */}
+          <div className="border-t border-gray-100 pt-4">
+            <p className="text-sm font-medium text-gray-700 mb-0.5">Gemini API Key</p>
+            <p className="text-[11px] text-gray-400 mb-2">
+              Used for invoice &amp; waste photo scanning. Free at{' '}
+              <a href="https://aistudio.google.com" target="_blank" rel="noopener noreferrer" className="text-blue-500 underline">
+                aistudio.google.com
+              </a>
+            </p>
+            <input
+              type="password"
+              placeholder="AIza..."
+              value={geminiKey}
+              onChange={(e) => setGeminiKey(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono mb-2"
+            />
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  localStorage.setItem('milk-manager-gemini-key', geminiKey.trim())
+                  setGeminiKeySaved(true)
+                  setTimeout(() => setGeminiKeySaved(false), 2000)
+                }}
+                disabled={!geminiKey.trim()}
+                className="flex-1 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg disabled:opacity-40"
+              >
+                {geminiKeySaved ? 'Saved ✓' : 'Save Key'}
+              </button>
+              {geminiKey && (
+                <button
+                  onClick={() => { localStorage.removeItem('milk-manager-gemini-key'); setGeminiKey('') }}
+                  className="px-3 py-2 border border-red-200 text-red-600 text-sm rounded-lg"
+                >
+                  Remove
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Backup / Restore */}

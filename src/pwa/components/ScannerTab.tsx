@@ -1,13 +1,13 @@
 /**
  * ScannerTab.tsx
  *
- * Two modes:
- *  A — Invoice Scanner: photograph a Lactalis invoice → Claude Vision parses → updates stock
- *  B — Waste Scanner:   photograph thrown-out products → Claude Vision identifies → log waste
+ * Three modes:
+ *  A — Invoice Scanner:   photograph a Lactalis invoice → Gemini Vision parses → updates stock
+ *  B — Waste Scanner:     photograph thrown-out products → Gemini Vision identifies → log waste
+ *  C — Add to Order:      live camera barcode scan → product lookup → add to draft order
  */
 
-import { useRef, useState } from 'react'
-import Anthropic from '@anthropic-ai/sdk'
+import { useEffect, useRef, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import {
   AlertCircle,
@@ -20,9 +20,36 @@ import {
   X,
 } from 'lucide-react'
 import { db } from '../lib/db'
+import { nextDeliveryDate } from '../lib/constants'
 import type { WasteEntry } from '../lib/types'
 
-const API_KEY_STORAGE = 'milk-manager-api-key'
+const API_KEY_STORAGE = 'milk-manager-gemini-key'
+
+// ─── Gemini Vision helper ─────────────────────────────────────────────────────
+
+async function callGeminiVision(prompt: string, base64: string, mediaType: string): Promise<string> {
+  const apiKey = localStorage.getItem(API_KEY_STORAGE)
+  if (!apiKey) throw new Error('No Gemini API key set — add it in Settings')
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: mediaType, data: base64 } }] }],
+        generationConfig: { responseMimeType: 'application/json' },
+      }),
+    },
+  )
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => '')
+    throw new Error(`Gemini error ${res.status}: ${errBody.slice(0, 200)}`)
+  }
+  const json = await res.json()
+  const text = json.candidates?.[0]?.content?.parts?.[0]?.text
+  if (!text) throw new Error('Empty response from Gemini')
+  return text
+}
 
 // ─── Prompts ──────────────────────────────────────────────────────────────────
 
@@ -95,14 +122,18 @@ function ApiKeySetup({ onSave }: { onSave: (key: string) => void }) {
         <Key size={22} className="text-blue-600" />
       </div>
       <div>
-        <p className="text-sm font-semibold text-gray-900">Enter your Anthropic API Key</p>
+        <p className="text-sm font-semibold text-gray-900">Enter your Gemini API Key</p>
         <p className="text-xs text-gray-500 mt-1">
-          Required for photo scanning. Stored only in this browser.
+          Required for photo scanning. Free at{' '}
+          <a href="https://aistudio.google.com" target="_blank" rel="noopener noreferrer" className="text-blue-500 underline">
+            aistudio.google.com
+          </a>
+          . Stored only in this browser.
         </p>
       </div>
       <input
         type="password"
-        placeholder="sk-ant-..."
+        placeholder="AIza..."
         value={value}
         onChange={(e) => setValue(e.target.value)}
         className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono"
@@ -140,7 +171,7 @@ async function imageToBase64(file: File): Promise<{ base64: string; mediaType: s
 
 // ─── Invoice Scanner (Mode A) ─────────────────────────────────────────────────
 
-function InvoiceScanner({ apiKey }: { apiKey: string }) {
+function InvoiceScanner() {
   const [image, setImage] = useState<File | null>(null)
   const [preview, setPreview] = useState('')
   const [parsing, setParsing] = useState(false)
@@ -168,19 +199,7 @@ function InvoiceScanner({ apiKey }: { apiKey: string }) {
     setError('')
     try {
       const { base64, mediaType } = await imageToBase64(image)
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true })
-      const response = await client.messages.create({
-        model: 'claude-opus-4-6',
-        max_tokens: 2048,
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'image', source: { type: 'base64', media_type: mediaType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp', data: base64 } },
-            { type: 'text', text: INVOICE_PARSE_PROMPT },
-          ],
-        }],
-      })
-      const text = response.content[0].type === 'text' ? response.content[0].text : ''
+      const text = await callGeminiVision(INVOICE_PARSE_PROMPT, base64, mediaType)
       const jsonMatch = text.match(/\{[\s\S]*\}/)
       if (!jsonMatch) throw new Error('No JSON in response')
       const result: ParsedInvoice = JSON.parse(jsonMatch[0])
@@ -377,7 +396,7 @@ function InvoiceScanner({ apiKey }: { apiKey: string }) {
 
 // ─── Waste Scanner (Mode B) ───────────────────────────────────────────────────
 
-function WasteScanner({ apiKey }: { apiKey: string }) {
+function WasteScanner() {
   const [image, setImage] = useState<File | null>(null)
   const [preview, setPreview] = useState('')
   const [parsing, setParsing] = useState(false)
@@ -408,19 +427,7 @@ function WasteScanner({ apiKey }: { apiKey: string }) {
     setError('')
     try {
       const { base64, mediaType } = await imageToBase64(image)
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true })
-      const response = await client.messages.create({
-        model: 'claude-opus-4-6',
-        max_tokens: 1024,
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'image', source: { type: 'base64', media_type: mediaType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp', data: base64 } },
-            { type: 'text', text: WASTE_PARSE_PROMPT },
-          ],
-        }],
-      })
-      const text = response.content[0].type === 'text' ? response.content[0].text : ''
+      const text = await callGeminiVision(WASTE_PARSE_PROMPT, base64, mediaType)
       const jsonMatch = text.match(/\{[\s\S]*\}/)
       if (!jsonMatch) throw new Error('No JSON in response')
       const result: { items: ParsedWasteItem[] } = JSON.parse(jsonMatch[0])
@@ -691,18 +698,288 @@ function WasteScanner({ apiKey }: { apiKey: string }) {
   )
 }
 
+// ─── Add to Order Scanner (Mode C) ───────────────────────────────────────────
+
+type ScanState = 'scanning' | 'found' | 'notfound' | 'added'
+
+function AddToOrderScanner() {
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const rafRef = useRef<number | null>(null)
+  const shouldScanRef = useRef(true)
+
+  const [scanState, setScanState] = useState<ScanState>('scanning')
+  const [detectedBarcode, setDetectedBarcode] = useState('')
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [product, setProduct] = useState<any | null>(null)
+  const [qty, setQty] = useState(1)
+  const [addError, setAddError] = useState('')
+  const [manualInput, setManualInput] = useState('')
+  const [cameraError, setCameraError] = useState('')
+
+  const barcodeSupported = 'BarcodeDetector' in window
+
+  useEffect(() => {
+    shouldScanRef.current = true
+    if (barcodeSupported) startCamera()
+    return () => {
+      shouldScanRef.current = false
+      stopCamera()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  async function startCamera() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+      streamRef.current = stream
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream
+        await videoRef.current.play()
+      }
+      runDetection()
+    } catch {
+      setCameraError('Camera access denied — use manual entry below')
+    }
+  }
+
+  function stopCamera() {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    streamRef.current?.getTracks().forEach((t) => t.stop())
+    streamRef.current = null
+  }
+
+  function runDetection() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const detector = new (window as any).BarcodeDetector({
+      formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39'],
+    })
+
+    async function tick() {
+      if (!shouldScanRef.current) return
+      const video = videoRef.current
+      if (!video || video.readyState < 2) {
+        rafRef.current = requestAnimationFrame(tick)
+        return
+      }
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const barcodes: any[] = await detector.detect(video)
+        if (barcodes.length > 0 && shouldScanRef.current) {
+          shouldScanRef.current = false
+          await handleBarcode(barcodes[0].rawValue)
+          return
+        }
+      } catch { /* detector not ready yet */ }
+      if (shouldScanRef.current) rafRef.current = requestAnimationFrame(tick)
+    }
+
+    rafRef.current = requestAnimationFrame(tick)
+  }
+
+  async function handleBarcode(barcode: string) {
+    setDetectedBarcode(barcode)
+    const found =
+      (await db.products.where('barcode').equals(barcode).first()) ??
+      (await db.products.where('invoiceCode').equals(barcode).first())
+    if (found) {
+      setProduct(found)
+      setQty(1)
+      setScanState('found')
+    } else {
+      setScanState('notfound')
+    }
+  }
+
+  async function handleManualBarcode() {
+    const val = manualInput.trim()
+    if (!val) return
+    shouldScanRef.current = false
+    await handleBarcode(val)
+  }
+
+  async function handleAddToOrder() {
+    if (!product) return
+    setAddError('')
+    try {
+      let order = await db.orders.where('status').equals('draft').last()
+      if (!order) {
+        const nextDel = nextDeliveryDate()
+        const dateStr = `${nextDel.getFullYear()}-${String(nextDel.getMonth() + 1).padStart(2, '0')}-${String(nextDel.getDate()).padStart(2, '0')}`
+        const newId = (await db.orders.add({
+          deliveryDate: dateStr,
+          createdAt: new Date(),
+          approvedAt: new Date(),
+          status: 'draft',
+          totalCostEstimate: 0,
+        })) as number
+        order = await db.orders.get(newId)
+      }
+
+      const lines = await db.orderLines.where('orderId').equals(order!.id!).toArray()
+      const existingLine = lines.find((l) => l.productId === product.id)
+      if (existingLine) {
+        const newQty = existingLine.approvedQty + qty
+        await db.orderLines.update(existingLine.id!, {
+          approvedQty: newQty,
+          lineTotal: newQty * (product.lactalisCostPrice ?? 0),
+        })
+      } else {
+        await db.orderLines.add({
+          orderId: order!.id!,
+          productId: product.id!,
+          itemNumber: product.invoiceCode,
+          productName: product.name,
+          suggestedQty: qty,
+          approvedQty: qty,
+          unitPrice: product.lactalisCostPrice ?? 0,
+          lineTotal: qty * (product.lactalisCostPrice ?? 0),
+        })
+      }
+
+      setScanState('added')
+      setTimeout(() => scanAgain(), 1500)
+    } catch (e) {
+      setAddError(e instanceof Error ? e.message : 'Failed to add to order')
+    }
+  }
+
+  function scanAgain() {
+    setProduct(null)
+    setDetectedBarcode('')
+    setManualInput('')
+    setQty(1)
+    setAddError('')
+    setScanState('scanning')
+    shouldScanRef.current = true
+    if (barcodeSupported && streamRef.current) runDetection()
+  }
+
+  // ── Success state ──────────────────────────────────────────────────────────
+  if (scanState === 'added') {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 py-12 px-6 text-center">
+        <div className="w-14 h-14 rounded-full bg-green-100 flex items-center justify-center">
+          <CheckCircle2 size={28} className="text-green-600" />
+        </div>
+        <p className="text-base font-semibold text-gray-900">Added to draft order!</p>
+        <p className="text-sm text-gray-500">{product?.name}</p>
+      </div>
+    )
+  }
+
+  // ── Result card (found / not found) ───────────────────────────────────────
+  if (scanState === 'found' || scanState === 'notfound') {
+    return (
+      <div className="flex flex-col gap-4 p-4">
+        {scanState === 'found' && product ? (
+          <div className="bg-white border border-gray-100 rounded-xl p-4 flex flex-col gap-3">
+            <div className="flex items-center gap-3">
+              {product.imageUrl && (
+                <img src={product.imageUrl} alt="" className="w-14 h-14 rounded-lg object-cover bg-gray-100" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+              )}
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-gray-900 truncate">{product.name}</p>
+                <p className="text-[11px] text-gray-400">#{product.invoiceCode}</p>
+                {product.orderUnit && (
+                  <p className="text-[11px] text-gray-400">{product.orderUnit}</p>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-gray-500">Qty:</span>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setQty((q) => Math.max(1, q - 1))}
+                  className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-600">
+                  <Minus size={13} />
+                </button>
+                <span className="w-8 text-center text-sm font-semibold text-gray-900">{qty}</span>
+                <button onClick={() => setQty((q) => q + 1)}
+                  className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-600">
+                  <Plus size={13} />
+                </button>
+              </div>
+            </div>
+            {addError && <p className="text-xs text-red-500">{addError}</p>}
+            <div className="flex gap-2">
+              <button onClick={scanAgain}
+                className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium">
+                Scan Again
+              </button>
+              <button onClick={handleAddToOrder}
+                className="flex-1 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-semibold">
+                Add to Order
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="bg-white border border-gray-100 rounded-xl p-4 flex flex-col gap-3 items-center text-center">
+            <AlertCircle size={28} className="text-amber-400" />
+            <p className="text-sm font-semibold text-gray-900">Product not found</p>
+            <p className="text-xs text-gray-500 font-mono">{detectedBarcode}</p>
+            <button onClick={scanAgain}
+              className="w-full py-2.5 bg-blue-600 text-white rounded-xl text-sm font-semibold">
+              Scan Again
+            </button>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // ── Scanning state ─────────────────────────────────────────────────────────
+  return (
+    <div className="flex flex-col gap-4 p-4">
+      {barcodeSupported && !cameraError ? (
+        <div className="relative rounded-2xl overflow-hidden bg-black aspect-video">
+          <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <div className="w-48 h-32 border-2 border-white/60 rounded-xl" />
+          </div>
+          <p className="absolute bottom-3 left-0 right-0 text-center text-[11px] text-white/70">
+            Point camera at a barcode
+          </p>
+        </div>
+      ) : (
+        <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
+          <p className="text-xs text-amber-700">
+            {cameraError || 'BarcodeDetector not supported — use manual entry'}
+          </p>
+        </div>
+      )}
+
+      {/* Manual barcode entry fallback */}
+      <div className="flex gap-2">
+        <input
+          type="text"
+          placeholder="Enter barcode manually…"
+          value={manualInput}
+          onChange={(e) => setManualInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') handleManualBarcode() }}
+          className="flex-1 border border-gray-300 rounded-xl px-3 py-2 text-sm"
+        />
+        <button
+          onClick={handleManualBarcode}
+          disabled={!manualInput.trim()}
+          className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-xl disabled:opacity-40"
+        >
+          Look Up
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function ScannerTab() {
   const [apiKey, setApiKey] = useState<string | null>(() => localStorage.getItem(API_KEY_STORAGE))
-  const [mode, setMode] = useState<'invoice' | 'waste'>('invoice')
+  const [mode, setMode] = useState<'invoice' | 'waste' | 'addtoorder'>('invoice')
 
   function saveApiKey(key: string) {
     localStorage.setItem(API_KEY_STORAGE, key)
     setApiKey(key)
   }
-
-  if (!apiKey) return <ApiKeySetup onSave={saveApiKey} />
 
   return (
     <div className="flex flex-col h-full">
@@ -725,21 +1002,35 @@ export default function ScannerTab() {
           >
             Waste
           </button>
-        </div>
-        <div className="flex items-center justify-end mt-1">
           <button
-            onClick={() => { localStorage.removeItem(API_KEY_STORAGE); setApiKey(null) }}
-            className="text-[10px] text-gray-400 hover:text-gray-600 flex items-center gap-0.5"
+            onClick={() => setMode('addtoorder')}
+            className={`flex-1 text-xs font-medium py-1.5 rounded-lg transition-colors ${
+              mode === 'addtoorder' ? 'bg-white text-green-600 shadow-sm' : 'text-gray-500'
+            }`}
           >
-            <X size={10} /> Remove API key
+            Add to Order
           </button>
         </div>
+        {mode !== 'addtoorder' && (
+          <div className="flex items-center justify-end mt-1">
+            <button
+              onClick={() => { localStorage.removeItem(API_KEY_STORAGE); setApiKey(null) }}
+              className="text-[10px] text-gray-400 hover:text-gray-600 flex items-center gap-0.5"
+            >
+              <X size={10} /> Remove API key
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="flex-1 overflow-auto">
-        {mode === 'invoice'
-          ? <InvoiceScanner apiKey={apiKey} />
-          : <WasteScanner apiKey={apiKey} />
+        {mode === 'addtoorder'
+          ? <AddToOrderScanner />
+          : !apiKey
+            ? <ApiKeySetup onSave={saveApiKey} />
+            : mode === 'invoice'
+              ? <InvoiceScanner />
+              : <WasteScanner />
         }
       </div>
     </div>

@@ -57,6 +57,45 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       })
       return true
 
+    // PWA requests a live schedule re-scrape
+    case 'TRIGGER_SCHEDULE_REFRESH':
+      chrome.storage.local.get('lactalisTab', (result) => {
+        if (result.lactalisTab?.tabId) {
+          chrome.tabs.sendMessage(result.lactalisTab.tabId, { type: 'SCRAPE_SCHEDULE' }, () => {
+            if (chrome.runtime.lastError) {
+              // Tab gone — open portal so scheduleScraper auto-runs on load
+              chrome.tabs.create({ url: 'https://my.lactalis.com.au/customer/product/quick-add/' })
+            }
+          })
+        } else {
+          chrome.tabs.create({ url: 'https://my.lactalis.com.au/customer/product/quick-add/' })
+        }
+        sendResponse({ ok: true })
+      })
+      return true
+
+    // PWA requests auto-submission of the pending order to Lactalis
+    case 'TRIGGER_ORDER_SUBMIT':
+      chrome.storage.local.get(['pendingOrder', 'lactalisTab'], (result) => {
+        const quickOrderUrl = 'https://my.lactalis.com.au/customer/product/quick-add/'
+        if (result.lactalisTab?.tabId && result.lactalisTab.pageType === 'quick_order') {
+          chrome.tabs.sendMessage(
+            result.lactalisTab.tabId,
+            { type: 'FILL_ORDER', order: result.pendingOrder },
+            () => {
+              if (chrome.runtime.lastError) {
+                chrome.tabs.create({ url: quickOrderUrl })
+              }
+            }
+          )
+        } else {
+          // quickOrder.js auto-detects pendingOrder on page load
+          chrome.tabs.create({ url: quickOrderUrl })
+        }
+        sendResponse({ ok: true })
+      })
+      return true
+
     default:
       sendResponse({ ok: false, error: `Unknown message type: ${msg.type}` })
   }
