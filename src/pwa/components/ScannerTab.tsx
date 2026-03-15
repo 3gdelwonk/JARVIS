@@ -410,6 +410,7 @@ function useBarcodeCamera(onDetected: (barcode: string) => void) {
   const shouldScanRef = useRef(true)
   const onDetectedRef = useRef(onDetected)
   const [cameraError, setCameraError] = useState('')
+  const [isMirrored, setIsMirrored] = useState(false)
 
   // Keep callback ref up to date so detectors always call the latest handler
   useEffect(() => { onDetectedRef.current = onDetected })
@@ -423,9 +424,15 @@ function useBarcodeCamera(onDetected: (barcode: string) => void) {
           video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
         })
       } catch {
-        stream = await navigator.mediaDevices.getUserMedia({ video: true })
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+        })
       }
       streamRef.current = stream
+      // Mirror front-facing cameras and desktop webcams; back cameras are natural.
+      // Desktop webcams return undefined/'' for facingMode.
+      const facingMode = stream.getVideoTracks()[0]?.getSettings().facingMode
+      setIsMirrored(facingMode === 'user' || !facingMode)
       if (videoRef.current) {
         videoRef.current.srcObject = stream
         await videoRef.current.play()
@@ -492,7 +499,11 @@ function useBarcodeCamera(onDetected: (barcode: string) => void) {
   async function runZxingDetection() {
     try {
       const { BrowserMultiFormatReader } = await import('@zxing/browser')
-      const reader = new BrowserMultiFormatReader()
+      // DecodeHintType.TRY_HARDER = 3. Use numeric key + any cast to avoid
+      // importing @zxing/library directly (it is a transitive dep, fragile).
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const hints = new Map<any, unknown>([[3, true]])
+      const reader = new BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 100 })
       const controls = await reader.decodeFromVideoElement(
         videoRef.current!,
         (result) => {
@@ -524,7 +535,7 @@ function useBarcodeCamera(onDetected: (barcode: string) => void) {
     }
   }
 
-  return { videoRef, cameraError, startCamera, stopCamera, resumeScanning, shouldScanRef, streamRef }
+  return { videoRef, cameraError, isMirrored, startCamera, stopCamera, resumeScanning, shouldScanRef, streamRef }
 }
 
 // ─── Waste Scanner (Mode B) ───────────────────────────────────────────────────
@@ -562,7 +573,7 @@ function WasteScanner() {
 
   const products = useLiveQuery(() => db.products.toArray(), [])
 
-  const { videoRef, cameraError, startCamera, stopCamera, resumeScanning, shouldScanRef } =
+  const { videoRef, cameraError, isMirrored, startCamera, stopCamera, resumeScanning, shouldScanRef } =
     useBarcodeCamera(handleWasteBarcode)
 
   // Start/stop barcode camera whenever mode switches to/from 'barcode'
@@ -805,7 +816,7 @@ function WasteScanner() {
         <div className={`relative rounded-2xl overflow-hidden bg-black aspect-video${bcState !== 'scanning' ? ' hidden' : ''}`}>
           {!cameraError ? (
             <>
-              <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
+              <video ref={videoRef} className="w-full h-full object-cover" playsInline muted style={isMirrored ? { transform: 'scaleX(-1)' } : undefined} />
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                 <div className="w-48 h-32 border-2 border-white/60 rounded-xl" />
               </div>
@@ -1136,7 +1147,7 @@ function AddToOrderScanner() {
   const [addError, setAddError] = useState('')
   const [manualInput, setManualInput] = useState('')
 
-  const { videoRef, cameraError, startCamera, stopCamera, resumeScanning, shouldScanRef } =
+  const { videoRef, cameraError, isMirrored, startCamera, stopCamera, resumeScanning, shouldScanRef } =
     useBarcodeCamera(handleBarcode)
 
   useEffect(() => {
@@ -1234,7 +1245,7 @@ function AddToOrderScanner() {
       <div className={`relative rounded-2xl overflow-hidden bg-black aspect-video${scanState !== 'scanning' ? ' hidden' : ''}`}>
         {!cameraError ? (
           <>
-            <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
+            <video ref={videoRef} className="w-full h-full object-cover" playsInline muted style={isMirrored ? { transform: 'scaleX(-1)' } : undefined} />
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
               <div className="w-48 h-32 border-2 border-white/60 rounded-xl" />
             </div>
