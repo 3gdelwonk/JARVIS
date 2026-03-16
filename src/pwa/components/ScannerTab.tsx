@@ -555,7 +555,7 @@ function WasteScanner() {
   const [reviewItems, setReviewItems] = useState<StagedWasteEntry[]>([])
   const [sessionLog, setSessionLog] = useState<StagedWasteEntry[]>([])
   const [saving, setSaving] = useState(false)
-  const [wasteSummary, setWasteSummary] = useState<StagedWasteEntry[] | null>(null)
+  const [showWasteReview, setShowWasteReview] = useState(false)
   const [error, setError] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -702,13 +702,21 @@ function WasteScanner() {
           }
         }
       }
-      setWasteSummary([...sessionLog])
+      setShowWasteReview(false)
       setSessionLog([])
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Save failed')
     } finally {
       setSaving(false)
     }
+  }
+
+  function updateSessionItem(i: number, patch: Partial<StagedWasteEntry>) {
+    setSessionLog(prev => prev.map((item, idx) => idx === i ? { ...item, ...patch } : item))
+  }
+
+  function removeSessionItem(i: number) {
+    setSessionLog(prev => prev.filter((_, idx) => idx !== i))
   }
 
   // ── Mode toggle UI ──
@@ -734,42 +742,79 @@ function WasteScanner() {
     </div>
   )
 
-  // ── Waste session summary modal (shared across both modes) ──
+  // ── Waste review modal (shared across both modes — opens before DB write) ──
 
-  const wasteSummaryModal = wasteSummary && (
+  const wasteReviewModal = showWasteReview && (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-[380px] flex flex-col overflow-hidden shadow-xl">
-        <div className="px-5 pt-5 pb-4 flex flex-col gap-1">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-full bg-red-100 flex items-center justify-center shrink-0">
-              <CheckCircle2 size={18} className="text-red-600" />
-            </div>
-            <p className="text-base font-semibold text-gray-900">Waste Session Logged</p>
-          </div>
-          <p className="text-xs text-gray-400 pl-10">{wasteSummary.length} {wasteSummary.length === 1 ? 'entry' : 'entries'} saved</p>
+      <div className="bg-white rounded-2xl w-full max-w-[380px] flex flex-col overflow-hidden shadow-xl max-h-[90vh]">
+        <div className="px-5 pt-5 pb-3 flex items-center justify-between shrink-0">
+          <p className="text-base font-semibold text-gray-900">Review Waste ({sessionLog.length})</p>
+          <button onClick={() => setShowWasteReview(false)} className="p-1 text-gray-400 hover:text-gray-600">
+            <X size={18} />
+          </button>
         </div>
-        <div className="border-t border-gray-100 mx-4" />
-        <div className="overflow-y-auto max-h-52">
-          {wasteSummary.map((item, i) => (
-            <div key={i} className="flex items-center justify-between px-5 py-2.5 border-b border-gray-50 last:border-0">
-              <p className="text-sm text-gray-800 truncate flex-1">{item.productName}</p>
-              <div className="flex items-center gap-2 shrink-0 ml-3">
-                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-                  item.reason === 'expired' ? 'bg-red-100 text-red-700'
-                  : item.reason === 'damaged' ? 'bg-amber-100 text-amber-700'
-                  : 'bg-gray-100 text-gray-600'
-                }`}>{item.reason}</span>
-                <span className="text-sm font-semibold text-gray-700">×{item.qty}</span>
+        <div className="border-t border-gray-100 mx-4 shrink-0" />
+        <div className="overflow-y-auto flex-1 px-4 py-2 flex flex-col gap-2">
+          {sessionLog.map((item, i) => (
+            <div key={i} className="bg-gray-50 rounded-xl p-3 flex flex-col gap-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-medium text-gray-900 truncate flex-1">{item.productName}</p>
+                <button onClick={() => removeSessionItem(i)} className="p-1 text-gray-300 hover:text-red-400 shrink-0">
+                  <Trash2 size={13} />
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => updateSessionItem(i, { qty: Math.max(1, item.qty - 1) })}
+                    className="w-7 h-7 rounded-full bg-white border border-gray-200 flex items-center justify-center text-gray-600"
+                  >
+                    <Minus size={12} />
+                  </button>
+                  <span className="w-8 text-center text-sm font-semibold text-gray-900">{item.qty}</span>
+                  <button
+                    onClick={() => updateSessionItem(i, { qty: item.qty + 1 })}
+                    className="w-7 h-7 rounded-full bg-white border border-gray-200 flex items-center justify-center text-gray-600"
+                  >
+                    <Plus size={12} />
+                  </button>
+                </div>
+                <select
+                  value={item.reason}
+                  onChange={(e) => updateSessionItem(i, { reason: e.target.value as StagedWasteEntry['reason'] })}
+                  className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white"
+                >
+                  <option value="expired">Expired</option>
+                  <option value="damaged">Damaged</option>
+                  <option value="other">Other</option>
+                </select>
               </div>
             </div>
           ))}
+          {sessionLog.length === 0 && (
+            <p className="text-sm text-gray-400 text-center py-6">No items to log</p>
+          )}
         </div>
-        <div className="px-4 py-4">
+        {error && (
+          <div className="mx-4 mb-2 flex items-start gap-2 bg-red-50 border border-red-100 rounded-xl px-3 py-2.5 shrink-0">
+            <AlertCircle size={14} className="text-red-500 mt-0.5 shrink-0" />
+            <p className="text-xs text-red-600">{error}</p>
+          </div>
+        )}
+        <div className="px-4 pb-4 pt-2 flex flex-col gap-2 shrink-0 border-t border-gray-100">
           <button
-            onClick={() => setWasteSummary(null)}
-            className="w-full py-3 bg-red-600 text-white text-sm font-semibold rounded-xl"
+            onClick={logAllWaste}
+            disabled={saving || sessionLog.length === 0}
+            className="w-full py-3 bg-red-600 text-white text-sm font-semibold rounded-xl disabled:opacity-50 flex items-center justify-center gap-2"
           >
-            Done
+            {saving && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+            {saving ? 'Saving…' : `Confirm & Log (${sessionLog.length})`}
+          </button>
+          <button
+            onClick={() => setShowWasteReview(false)}
+            className="w-full py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium"
+          >
+            Back to Scanning
           </button>
         </div>
       </div>
@@ -781,7 +826,7 @@ function WasteScanner() {
   if (wasteMode === 'barcode') {
     return (
       <div className="flex flex-col gap-4 p-4">
-        {wasteSummaryModal}
+        {wasteReviewModal}
         {modeToggle}
 
         {/* Live camera viewfinder — always visible */}
@@ -918,12 +963,10 @@ function WasteScanner() {
               </div>
             )}
             <button
-              onClick={logAllWaste}
-              disabled={saving}
-              className="w-full bg-red-600 text-white text-sm font-semibold py-3 rounded-xl disabled:opacity-50 flex items-center justify-center gap-2"
+              onClick={() => setShowWasteReview(true)}
+              className="w-full bg-red-600 text-white text-sm font-semibold py-3 rounded-xl flex items-center justify-center gap-2"
             >
-              {saving && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
-              {saving ? 'Saving…' : `Log All Waste (${sessionLog.length})`}
+              Review &amp; Log Waste ({sessionLog.length})
             </button>
           </div>
         )}
@@ -935,7 +978,7 @@ function WasteScanner() {
 
   return (
     <div className="flex flex-col gap-4 p-4">
-      {wasteSummaryModal}
+      {wasteReviewModal}
       {modeToggle}
 
       {/* Session counter */}
@@ -943,11 +986,10 @@ function WasteScanner() {
         <div className="bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 flex items-center justify-between">
           <p className="text-xs text-amber-700 font-medium">{sessionLog.length} items staged</p>
           <button
-            onClick={logAllWaste}
-            disabled={saving}
-            className="text-xs bg-amber-500 text-white px-3 py-1.5 rounded-lg font-medium disabled:opacity-50"
+            onClick={() => setShowWasteReview(true)}
+            className="text-xs bg-amber-500 text-white px-3 py-1.5 rounded-lg font-medium"
           >
-            {saving ? 'Saving…' : 'Log All Waste'}
+            Review &amp; Log
           </button>
         </div>
       )}
@@ -1088,12 +1130,10 @@ function WasteScanner() {
           </div>
 
           <button
-            onClick={logAllWaste}
-            disabled={saving}
-            className="w-full bg-green-600 text-white text-sm font-semibold py-3 rounded-xl disabled:opacity-50 flex items-center justify-center gap-2"
+            onClick={() => setShowWasteReview(true)}
+            className="w-full bg-green-600 text-white text-sm font-semibold py-3 rounded-xl"
           >
-            {saving && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
-            {saving ? 'Saving…' : `Log All Waste (${sessionLog.length})`}
+            Review &amp; Log Waste ({sessionLog.length})
           </button>
         </div>
       )}
@@ -1113,11 +1153,8 @@ function AddToOrderScanner({ onNavigateToOrders }: { onNavigateToOrders?: () => 
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState('')
   const [manualInput, setManualInput] = useState('')
-  const [submitSummary, setSubmitSummary] = useState<{
-    items: Array<{ productId: number; name: string; invoiceCode: string; qty: number; unitPrice: number }>;
-    total: number;
-    deliveryDate: string;
-  } | null>(null)
+  const [showOrderReview, setShowOrderReview] = useState(false)
+  const [orderSavedBanner, setOrderSavedBanner] = useState<{ count: number; deliveryDate: string } | null>(null)
 
   const { videoRef, cameraError, isMirrored, startCamera, stopCamera, resumeScanning, shouldScanRef } =
     useBarcodeCamera(handleBarcode)
@@ -1213,8 +1250,8 @@ function AddToOrderScanner({ onNavigateToOrders }: { onNavigateToOrders?: () => 
           })
         }
       }
-      const total = stagedItems.reduce((s, i) => s + i.qty * i.unitPrice, 0)
-      setSubmitSummary({ items: [...stagedItems], total, deliveryDate: order!.deliveryDate })
+      setShowOrderReview(false)
+      setOrderSavedBanner({ count: stagedItems.length, deliveryDate: order!.deliveryDate })
       setStagedItems([])
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : 'Failed to submit order')
@@ -1225,51 +1262,107 @@ function AddToOrderScanner({ onNavigateToOrders }: { onNavigateToOrders?: () => 
 
   return (
     <div className="flex flex-col gap-4 p-4">
-      {/* Order summary modal */}
-      {submitSummary && (
+      {/* Order review modal — opens before DB write */}
+      {showOrderReview && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-[380px] flex flex-col overflow-hidden shadow-xl">
-            <div className="px-5 pt-5 pb-4 flex flex-col gap-1">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center shrink-0">
-                  <CheckCircle2 size={18} className="text-green-600" />
-                </div>
-                <p className="text-base font-semibold text-gray-900">Added to Draft Order</p>
-              </div>
-              <p className="text-xs text-gray-400 pl-10">
-                Delivery: {new Date(submitSummary.deliveryDate + 'T00:00:00').toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' })}
-              </p>
-            </div>
-            <div className="border-t border-gray-100 mx-4" />
-            <div className="overflow-y-auto max-h-52">
-              {submitSummary.items.map((item, i) => (
-                <div key={i} className="flex items-center justify-between px-5 py-2.5 border-b border-gray-50 last:border-0">
-                  <p className="text-sm text-gray-800 truncate flex-1">{item.name}</p>
-                  <span className="text-sm font-semibold text-gray-700 shrink-0 ml-3">×{item.qty}</span>
-                </div>
-              ))}
-            </div>
-            <div className="border-t border-gray-100 mx-4" />
-            <div className="px-5 py-3 flex items-center justify-between">
-              <span className="text-xs text-gray-500">Est. Total</span>
-              <span className="text-sm font-semibold text-gray-900">${submitSummary.total.toFixed(2)}</span>
-            </div>
-            <div className="px-4 pb-4 flex flex-col gap-2">
-              {onNavigateToOrders && (
-                <button
-                  onClick={() => { setSubmitSummary(null); onNavigateToOrders() }}
-                  className="w-full py-3 bg-green-600 text-white text-sm font-semibold rounded-xl"
-                >
-                  Go to Order Tab →
-                </button>
-              )}
-              <button
-                onClick={() => setSubmitSummary(null)}
-                className="w-full py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium"
-              >
-                Continue Scanning
+          <div className="bg-white rounded-2xl w-full max-w-[380px] flex flex-col overflow-hidden shadow-xl max-h-[90vh]">
+            <div className="px-5 pt-5 pb-3 flex items-center justify-between shrink-0">
+              <p className="text-base font-semibold text-gray-900">Review Order ({stagedItems.length})</p>
+              <button onClick={() => setShowOrderReview(false)} className="p-1 text-gray-400 hover:text-gray-600">
+                <X size={18} />
               </button>
             </div>
+            <div className="border-t border-gray-100 mx-4 shrink-0" />
+            <div className="overflow-y-auto flex-1 px-4 py-2 flex flex-col gap-2">
+              {stagedItems.map((item, i) => (
+                <div key={i} className="bg-gray-50 rounded-xl px-3 py-2.5 flex items-center gap-2">
+                  <p className="text-sm text-gray-800 flex-1 truncate">{item.name}</p>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() => setStagedItems(prev => prev.map((s, idx) => idx === i ? { ...s, qty: Math.max(1, s.qty - 1) } : s))}
+                      className="w-7 h-7 rounded-full bg-white border border-gray-200 flex items-center justify-center text-gray-600"
+                    >
+                      <Minus size={12} />
+                    </button>
+                    <span className="w-8 text-center text-sm font-semibold text-gray-900">{item.qty}</span>
+                    <button
+                      onClick={() => setStagedItems(prev => prev.map((s, idx) => idx === i ? { ...s, qty: s.qty + 1 } : s))}
+                      className="w-7 h-7 rounded-full bg-white border border-gray-200 flex items-center justify-center text-gray-600"
+                    >
+                      <Plus size={12} />
+                    </button>
+                  </div>
+                  <button onClick={() => setStagedItems(prev => prev.filter((_, idx) => idx !== i))}
+                    className="p-1 text-gray-300 hover:text-red-400 shrink-0">
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))}
+              {stagedItems.length === 0 && (
+                <p className="text-sm text-gray-400 text-center py-6">No items staged</p>
+              )}
+            </div>
+            {stagedItems.length > 0 && (
+              <div className="px-5 py-2.5 flex items-center justify-between border-t border-gray-100 shrink-0">
+                <span className="text-xs text-gray-500">Est. Total</span>
+                <span className="text-sm font-semibold text-gray-900">
+                  ${stagedItems.reduce((s, i) => s + i.qty * i.unitPrice, 0).toFixed(2)}
+                </span>
+              </div>
+            )}
+            {submitError && (
+              <div className="mx-4 mb-2 flex items-start gap-2 bg-red-50 border border-red-100 rounded-xl px-3 py-2.5 shrink-0">
+                <AlertCircle size={14} className="text-red-500 mt-0.5 shrink-0" />
+                <p className="text-xs text-red-600">{submitError}</p>
+              </div>
+            )}
+            <div className="px-4 pb-4 pt-2 flex flex-col gap-2 shrink-0 border-t border-gray-100">
+              <button
+                onClick={submitAll}
+                disabled={submitting || stagedItems.length === 0}
+                className="w-full py-3 bg-green-600 text-white text-sm font-semibold rounded-xl disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {submitting && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+                {submitting ? 'Submitting…' : 'Confirm & Add to Order'}
+              </button>
+              <button
+                onClick={() => setShowOrderReview(false)}
+                className="w-full py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium"
+              >
+                Back to Scanning
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Success banner — shown after order written */}
+      {orderSavedBanner && (
+        <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 flex items-center gap-3">
+          <CheckCircle2 size={18} className="text-green-600 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-green-800">
+              {orderSavedBanner.count} {orderSavedBanner.count === 1 ? 'item' : 'items'} added to order
+            </p>
+            <p className="text-[11px] text-green-600">
+              Delivery: {new Date(orderSavedBanner.deliveryDate + 'T00:00:00').toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' })}
+            </p>
+          </div>
+          <div className="flex flex-col gap-1 shrink-0">
+            {onNavigateToOrders && (
+              <button
+                onClick={() => { setOrderSavedBanner(null); onNavigateToOrders() }}
+                className="text-xs bg-green-600 text-white px-3 py-1.5 rounded-lg font-medium"
+              >
+                Order Tab →
+              </button>
+            )}
+            <button
+              onClick={() => setOrderSavedBanner(null)}
+              className="text-xs text-green-600 px-3 py-1 rounded-lg font-medium text-center"
+            >
+              Dismiss
+            </button>
           </div>
         </div>
       )}
@@ -1393,12 +1486,10 @@ function AddToOrderScanner({ onNavigateToOrders }: { onNavigateToOrders?: () => 
             </div>
           )}
           <button
-            onClick={submitAll}
-            disabled={submitting}
-            className="w-full bg-green-600 text-white text-sm font-semibold py-3 rounded-xl disabled:opacity-50 flex items-center justify-center gap-2"
+            onClick={() => setShowOrderReview(true)}
+            className="w-full bg-green-600 text-white text-sm font-semibold py-3 rounded-xl"
           >
-            {submitting && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
-            {submitting ? 'Submitting…' : `Submit All to Order (${stagedItems.length})`}
+            Review &amp; Submit ({stagedItems.length})
           </button>
         </div>
       )}
