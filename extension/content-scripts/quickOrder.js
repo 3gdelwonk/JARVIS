@@ -364,8 +364,8 @@
     })
     createOrderObserver.observe(document.body, { childList: true, subtree: true })
 
-    // Stop watching after 60 seconds regardless
-    setTimeout(() => createOrderObserver?.disconnect(), 60_000)
+    // Stop watching after 30 seconds regardless
+    setTimeout(() => createOrderObserver?.disconnect(), 30_000)
   }
 
   // ─── Success detection ────────────────────────────────────────────────────
@@ -376,35 +376,40 @@
    */
   function watchForOrderSuccess() {
     const SUCCESS_RE = /(?:order|purchase|confirmation)\s*(?:no|number|#|ref)[:\s]+([A-Z0-9\-]+)/i
+    let successDebounce = null
 
     const observer = new MutationObserver(() => {
-      const text = document.body.innerText ?? ''
-      const m = text.match(SUCCESS_RE)
-      if (!m) return
+      // Debounce: avoid running document.body.innerText on every mutation
+      clearTimeout(successDebounce)
+      successDebounce = setTimeout(() => {
+        const text = document.body.innerText ?? ''
+        const m = text.match(SUCCESS_RE)
+        if (!m) return
 
-      const orderRef = m[1]
-      if (DEBUG) console.log(`[Milk Manager] Order submitted! Reference: ${orderRef}`)
+        const orderRef = m[1]
+        if (DEBUG) console.log(`[Milk Manager] Order submitted! Reference: ${orderRef}`)
 
-      // Store the submission in chrome.storage for the popup and PWA to read
-      chrome.storage.local.get('pendingOrder', (result) => {
-        const order = result.pendingOrder
-        if (!order) return
-        chrome.storage.local.set({
-          lastSubmission: {
-            orderId: order.orderId,
-            lactalisRef: orderRef,
-            submittedAt: Date.now(),
-          },
+        // Store the submission in chrome.storage for the popup and PWA to read
+        chrome.storage.local.get('pendingOrder', (result) => {
+          const order = result.pendingOrder
+          if (!order) return
+          chrome.storage.local.set({
+            lastSubmission: {
+              orderId: order.orderId,
+              lactalisRef: orderRef,
+              submittedAt: Date.now(),
+            },
+          })
+          // Clear the pending order now it's been submitted
+          chrome.storage.local.remove('pendingOrder')
         })
-        // Clear the pending order now it's been submitted
-        chrome.storage.local.remove('pendingOrder')
-      })
 
-      showReminder(`Order submitted! Reference: ${orderRef}`, 'success')
-      observer.disconnect()
+        showReminder(`Order submitted! Reference: ${orderRef}`, 'success')
+        observer.disconnect()
+      }, 2000)
     })
 
-    observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+    observer.observe(document.body, { childList: true, subtree: true })
     setTimeout(() => observer.disconnect(), 5 * 60_000)  // stop after 5 min
   }
 

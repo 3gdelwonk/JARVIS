@@ -3,7 +3,7 @@ main = "src/index.ts"
 compatibility_date = "2024-12-01"
 
 [vars]
-LACTALIS_BASE = "https://my.lactalis.com.au"
+LACTALIS_BASE = "https://mylactalis.com.au"
 SLOT_CONFIG_ID = "869"
 
 [[kv_namespaces]]

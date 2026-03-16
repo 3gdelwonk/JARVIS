@@ -557,10 +557,23 @@
   setTimeout(scrapeAndStore, 800)
 
   // Re-run if the page mutates significantly (SPA navigation within the portal)
+  // Limited to 3 re-runs — schedule data doesn't change after initial load
   let mutationDebounce = null
+  let mutationReRunCount = 0
+  const MAX_MUTATION_RERUNS = 3
   const observer = new MutationObserver(() => {
+    if (mutationReRunCount >= MAX_MUTATION_RERUNS) {
+      observer.disconnect()
+      return
+    }
     clearTimeout(mutationDebounce)
-    mutationDebounce = setTimeout(scrapeAndStore, 1500)
+    mutationDebounce = setTimeout(() => {
+      mutationReRunCount++
+      scrapeAndStore()
+      if (mutationReRunCount >= MAX_MUTATION_RERUNS) {
+        observer.disconnect()
+      }
+    }, 3000)
   })
   observer.observe(document.body, { childList: true, subtree: false })
 

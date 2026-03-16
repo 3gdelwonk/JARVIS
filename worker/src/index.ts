@@ -3,12 +3,24 @@
  *
  * Routes:
  *   POST /login          — authenticate with Lactalis, return session token
- *   GET  /schedule       — proxy delivery schedule
- *   POST /submit-order   — proxy quick-order submission
+ *   GET  /schedule       — proxy delivery schedule (checks KV cache first)
+ *   POST /submit-order   — proxy quick-order submission (falls back to extension relay)
+ *   GET  /debug-login    — diagnostic: shows what the login page looks like
  *   GET  /health         — simple liveness check
+ *
+ * Extension cloud sync routes (auth'd with EXTENSION_SECRET):
+ *   POST /extension/schedule      — extension pushes scraped schedule → KV
+ *   GET  /extension/pending-order — extension polls for pending orders
+ *   POST /extension/order-result  — extension pushes submission result
+ *   POST /extension/cookies       — extension pushes Lactalis cookies
+ *   GET  /extension/order-status  — PWA polls for order completion (no auth)
  *
  * Auth: PWA sends `Authorization: Bearer <sessionToken>` for protected routes.
  * The Worker stores Lactalis session cookies in KV, keyed by sessionToken.
+ *
+ * Note: Lactalis is behind Cloudflare. Worker→Cloudflare subrequests can fail
+ * with error 1016 (origin DNS error). We work around this by resolving DNS
+ * via DoH and fetching by IP with the Host header.
  */
 
 export interface Env {
@@ -16,6 +28,7 @@ export interface Env {
   LACTALIS_BASE: string
   SLOT_CONFIG_ID: string
   ALLOWED_ORIGIN?: string
+  EXTENSION_SECRET?: string
 }
 
 interface SessionData {
@@ -26,7 +39,7 @@ interface SessionData {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function corsHeaders(origin: string, env: Env): Record<string, string> {
-  const allowed = env.ALLOWED_ORIGIN || '*'
+  const allowed = env.ALLOWED_ORIGIN || 'https://3gdelwonk.github.io'
   return {
     'Access-Control-Allow-Origin': allowed === '*' ? (origin || '*') : allowed,
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -54,12 +67,85 @@ function generateToken(): string {
 /** Extract all Set-Cookie values and merge into a single cookie header string. */
 function extractCookies(response: Response): string {
   const cookies: string[] = []
-  // Response.headers.getSetCookie() is available in Workers runtime
   for (const header of response.headers.getSetCookie?.() ?? []) {
     const nameVal = header.split(';')[0]
     if (nameVal) cookies.push(nameVal.trim())
   }
   return cookies.join('; ')
+}
+
+// ─── DNS resolution + fetch bypass for Cloudflare→Cloudflare ─────────────────
+
+/** Cache resolved IPs for 10 minutes to avoid hammering DoH on every request. */
+const dnsCache = new Map<string, { ip: string; expiresAt: number }>()
+
+/**
+ * Resolve a hostname to an IP via Cloudflare DNS-over-HTTPS.
+ * This is needed because Worker→Cloudflare-proxied-origin requests fail with error 1016.
+ */
+async function resolveHost(hostname: string): Promise<string | null> {
+  const cached = dnsCache.get(hostname)
+  if (cached && cached.expiresAt > Date.now()) return cached.ip
+
+  try {
+    const res = await fetch(
+      `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(hostname)}&type=A`,
+      { headers: { 'Accept': 'application/dns-json' } },
+    )
+    const data = await res.json() as { Answer?: Array<{ type: number; data: string }> }
+    const aRecord = data.Answer?.find((r) => r.type === 1)
+    if (aRecord?.data) {
+      dnsCache.set(hostname, { ip: aRecord.data, expiresAt: Date.now() + 600_000 })
+      return aRecord.data
+    }
+  } catch {
+    // Fall through
+  }
+
+  // Fallback: try Google DoH
+  try {
+    const res = await fetch(
+      `https://dns.google/resolve?name=${encodeURIComponent(hostname)}&type=A`,
+    )
+    const data = await res.json() as { Answer?: Array<{ type: number; data: string }> }
+    const aRecord = data.Answer?.find((r) => r.type === 1)
+    if (aRecord?.data) {
+      dnsCache.set(hostname, { ip: aRecord.data, expiresAt: Date.now() + 600_000 })
+      return aRecord.data
+    }
+  } catch {
+    // Fall through
+  }
+
+  return null
+}
+
+/**
+ * Fetch a URL, working around Cloudflare error 1016 by resolving DNS manually
+ * and connecting to the origin IP with a Host header.
+ */
+async function proxyFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  // First, try a normal fetch
+  const directRes = await fetch(url, init)
+
+  // If we get a Cloudflare error (530/1016), retry via IP
+  if (directRes.status === 530) {
+    const parsed = new URL(url)
+    const ip = await resolveHost(parsed.hostname)
+    if (!ip) throw new Error(`DNS resolution failed for ${parsed.hostname}`)
+
+    // Rewrite URL to use IP, add Host header
+    const ipUrl = `${parsed.protocol}//${ip}${parsed.pathname}${parsed.search}`
+    const headers = new Headers(init.headers as HeadersInit)
+    headers.set('Host', parsed.hostname)
+
+    return fetch(ipUrl, {
+      ...init,
+      headers,
+    })
+  }
+
+  return directRes
 }
 
 /** Retrieve a valid session from KV, or null if expired/missing. */
@@ -85,6 +171,20 @@ function bearerToken(request: Request): string | null {
   return auth.slice(7).trim() || null
 }
 
+function isExtensionAuthed(request: Request, env: Env): boolean {
+  const secret = env.EXTENSION_SECRET
+  if (!secret) return false
+  return bearerToken(request) === secret
+}
+
+/** Detect Incapsula bot-protection block in response HTML. */
+function isIncapsulaBlocked(html: string): boolean {
+  return html.includes('_Incapsula_Resource')
+    || html.includes('incap_ses')
+    || html.includes('Request unsuccessful')
+    || html.includes('Incapsula incident')
+}
+
 // ─── Route handlers ───────────────────────────────────────────────────────────
 
 async function handleLogin(request: Request, env: Env, origin: string): Promise<Response> {
@@ -103,53 +203,125 @@ async function handleLogin(request: Request, env: Env, origin: string): Promise<
   const base = env.LACTALIS_BASE
 
   // Step 1: GET the login page to obtain a CSRF token + initial cookies
-  const loginPageRes = await fetch(`${base}/customer/user/login`, {
-    redirect: 'manual',
-    headers: { 'User-Agent': 'Mozilla/5.0' },
-  })
+  let loginPageRes: Response
+  try {
+    loginPageRes = await proxyFetch(`${base}/customer/user/login`, {
+      redirect: 'manual',
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+    })
+  } catch (e) {
+    return jsonResponse({ error: `Cannot reach Lactalis: ${(e as Error).message}` }, 502, origin, env)
+  }
+
   const loginPageCookies = extractCookies(loginPageRes)
   const loginHtml = await loginPageRes.text()
 
-  // Extract CSRF token from form
+  // If we got redirected, follow to get the actual login page
+  if (loginPageRes.status >= 300 && loginPageRes.status < 400) {
+    const redirectUrl = loginPageRes.headers.get('Location') ?? ''
+    const fullRedirectUrl = redirectUrl.startsWith('http') ? redirectUrl : `${base}${redirectUrl}`
+    try {
+      const redirectRes = await proxyFetch(fullRedirectUrl, {
+        redirect: 'manual',
+        headers: { 'Cookie': loginPageCookies, 'User-Agent': 'Mozilla/5.0' },
+      })
+      const redirectHtml = await redirectRes.text()
+      const redirectCookies = extractCookies(redirectRes)
+      return doLogin(username, password, redirectHtml,
+        [loginPageCookies, redirectCookies].filter(Boolean).join('; '),
+        base, env, origin)
+    } catch {
+      // Fall through to use original page
+    }
+  }
+
+  return doLogin(username, password, loginHtml, loginPageCookies, base, env, origin)
+}
+
+async function doLogin(
+  username: string, password: string, loginHtml: string, cookies: string,
+  base: string, env: Env, origin: string,
+): Promise<Response> {
+  // Extract CSRF token from form — try multiple patterns
   const csrfMatch = loginHtml.match(/name="_csrf_token"\s+value="([^"]+)"/)
+    ?? loginHtml.match(/name="_csrf_token"[^>]*value="([^"]+)"/)
+    ?? loginHtml.match(/value="([^"]+)"[^>]*name="_csrf_token"/)
     ?? loginHtml.match(/csrf[_-]?token[^"]*"[^"]*value="([^"]+)"/)
-  const csrfToken = csrfMatch?.[1] ?? ''
+    ?? loginHtml.match(/name="([^"]*token[^"]*)"[^>]*value="([^"]+)"/)
+  const csrfToken = csrfMatch?.[2] ?? csrfMatch?.[1] ?? ''
 
-  // Step 2: POST credentials
-  const formBody = new URLSearchParams({
-    '_username': username,
-    '_password': password,
-    '_csrf_token': csrfToken,
-  })
+  // Detect form field names from actual HTML
+  const usernameField = loginHtml.match(/name="([^"]*username[^"]*)"/)
+  const passwordField = loginHtml.match(/name="([^"]*password[^"]*)"/)
+  const usernameKey = usernameField?.[1] ?? '_username'
+  const passwordKey = passwordField?.[1] ?? '_password'
 
-  const loginRes = await fetch(`${base}/customer/user/login-check`, {
+  // Find the actual form action URL
+  const formAction = loginHtml.match(/form[^>]*action="([^"]+)"[^>]*method="post"/i)
+    ?? loginHtml.match(/method="post"[^>]*action="([^"]+)"/i)
+  const loginUrl = formAction?.[1]
+    ? (formAction[1].startsWith('http') ? formAction[1] : `${base}${formAction[1]}`)
+    : `${base}/customer/user/login-check`
+
+  // Build form body
+  const params: Record<string, string> = {
+    [usernameKey]: username,
+    [passwordKey]: password,
+  }
+  if (csrfToken) params['_csrf_token'] = csrfToken
+
+  const formBody = new URLSearchParams(params)
+
+  const loginRes = await proxyFetch(loginUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
-      'Cookie': loginPageCookies,
+      'Cookie': cookies,
       'User-Agent': 'Mozilla/5.0',
+      'Referer': `${base}/customer/user/login`,
     },
     body: formBody.toString(),
     redirect: 'manual',
   })
 
-  // Collect cookies from login response (merged with initial ones)
+  // Collect cookies from login response
   const postCookies = extractCookies(loginRes)
-  const allCookies = [loginPageCookies, postCookies].filter(Boolean).join('; ')
+  const allCookies = [cookies, postCookies].filter(Boolean).join('; ')
 
-  // OroCommerce redirects to /customer/user/login on failure, /customer on success
   const location = loginRes.headers.get('Location') ?? ''
-  const isLoginPage = location.includes('/login') && !location.includes('/login-check')
-  if (loginRes.status >= 400 || isLoginPage) {
-    return jsonResponse({ error: 'Login failed — check username/password' }, 401, origin, env)
+
+  // Failure detection
+  const isRedirectToLogin = location.includes('/login') && !location.includes('/login-check')
+  const isClientError = loginRes.status >= 400
+
+  if (isClientError) {
+    return jsonResponse({
+      error: 'Login failed — check username/password',
+      debug: { status: loginRes.status, location, csrfFound: !!csrfToken, loginUrl, usernameKey, passwordKey },
+    }, 401, origin, env)
   }
 
-  // Step 3: Follow redirect to confirm session is live
-  const dashRes = await fetch(location.startsWith('http') ? location : `${base}${location}`, {
-    headers: { 'Cookie': allCookies, 'User-Agent': 'Mozilla/5.0' },
-    redirect: 'manual',
-  })
-  const finalCookies = [allCookies, extractCookies(dashRes)].filter(Boolean).join('; ')
+  if (isRedirectToLogin) {
+    return jsonResponse({
+      error: 'Login failed — Lactalis redirected back to login page',
+      debug: { status: loginRes.status, location, csrfFound: !!csrfToken, loginUrl },
+    }, 401, origin, env)
+  }
+
+  // Follow redirect to confirm session
+  let finalCookies = allCookies
+  if (location) {
+    const fullUrl = location.startsWith('http') ? location : `${base}${location}`
+    try {
+      const dashRes = await proxyFetch(fullUrl, {
+        headers: { 'Cookie': allCookies, 'User-Agent': 'Mozilla/5.0' },
+        redirect: 'manual',
+      })
+      finalCookies = [allCookies, extractCookies(dashRes)].filter(Boolean).join('; ')
+    } catch {
+      // Non-fatal — proceed with cookies we have
+    }
+  }
 
   // Store session in KV (24h TTL)
   const sessionToken = generateToken()
@@ -163,6 +335,17 @@ async function handleLogin(request: Request, env: Env, origin: string): Promise<
 }
 
 async function handleSchedule(request: Request, env: Env, origin: string): Promise<Response> {
+  // Check KV cache first (populated by extension cloud sync)
+  const cached = await env.SESSIONS.get('schedule:latest')
+  if (cached) {
+    try {
+      const data = JSON.parse(cached)
+      return jsonResponse({ ...data, source: 'cloud-cache' }, 200, origin, env)
+    } catch {
+      // Corrupted cache — fall through to live fetch
+    }
+  }
+
   const session = await getSession(bearerToken(request), env)
   if (!session) {
     return jsonResponse({ error: 'Not authenticated' }, 401, origin, env)
@@ -171,7 +354,7 @@ async function handleSchedule(request: Request, env: Env, origin: string): Promi
   const base = env.LACTALIS_BASE
   const slotId = env.SLOT_CONFIG_ID
 
-  const res = await fetch(
+  const res = await proxyFetch(
     `${base}/delivery-slots/get-slots/${slotId}?preselectCurrentSlot=1`,
     {
       headers: {
@@ -193,28 +376,32 @@ async function handleSchedule(request: Request, env: Env, origin: string): Promi
 
   const contentType = res.headers.get('Content-Type') ?? ''
 
-  // The endpoint may return JSON or HTML (with embedded slot data)
   if (contentType.includes('application/json')) {
     const data = await res.json()
     return jsonResponse(data, 200, origin, env)
   }
 
-  // Parse HTML response for delivery slot information
   const html = await res.text()
+
+  // Detect Incapsula block — return cached if available, else 503
+  if (isIncapsulaBlocked(html)) {
+    return jsonResponse(
+      { error: 'Blocked by Incapsula — schedule will be provided by extension cloud sync' },
+      503, origin, env,
+    )
+  }
+
   const slots = parseScheduleHtml(html)
   return jsonResponse({ slots, raw: html.length > 10000 ? '(truncated)' : html }, 200, origin, env)
 }
 
-/** Best-effort parse of the delivery schedule HTML for slot dates. */
 function parseScheduleHtml(html: string): Array<{ deliveryDate: string; cutoffDate?: string; cutoffTime?: string }> {
   const slots: Array<{ deliveryDate: string; cutoffDate?: string; cutoffTime?: string }> = []
 
-  // Look for date patterns in delivery slot elements — adjust regex as portal HTML becomes clearer
   const dateRegex = /(\d{4}-\d{2}-\d{2})/g
-  const matches = html.matchAll(dateRegex)
   const seen = new Set<string>()
 
-  for (const m of matches) {
+  for (const m of html.matchAll(dateRegex)) {
     const date = m[1]
     if (!seen.has(date)) {
       seen.add(date)
@@ -222,7 +409,6 @@ function parseScheduleHtml(html: string): Array<{ deliveryDate: string; cutoffDa
     }
   }
 
-  // Also try dd/mm/yyyy format
   const auDateRegex = /(\d{1,2})\/(\d{1,2})\/(\d{4})/g
   for (const m of html.matchAll(auDateRegex)) {
     const date = `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`
@@ -254,8 +440,7 @@ async function handleSubmitOrder(request: Request, env: Env, origin: string): Pr
 
   const base = env.LACTALIS_BASE
 
-  // Step 1: GET the quick order page to extract CSRF token
-  const pageRes = await fetch(`${base}/customer/product/quick-add/`, {
+  const pageRes = await proxyFetch(`${base}/customer/product/quick-add/`, {
     headers: {
       'Cookie': session.cookies,
       'User-Agent': 'Mozilla/5.0',
@@ -276,23 +461,20 @@ async function handleSubmitOrder(request: Request, env: Env, origin: string): Pr
   const csrfName = csrfMatch?.[1] ?? '_token'
   const csrfValue = csrfMatch?.[2] ?? csrfMatch?.[1] ?? ''
 
-  // Merge any new cookies from the page fetch
   const pageCookies = extractCookies(pageRes)
   const mergedCookies = [session.cookies, pageCookies].filter(Boolean).join('; ')
 
-  // Step 2: Build the paste string (itemNumber,qty;itemNumber,qty;...)
   const pasteString = body.lines
     .filter((l) => l.qty > 0)
     .map((l) => `${l.itemNumber},${l.qty}`)
     .join(';')
 
-  // Step 3: POST the order via FormData
   const formData = new FormData()
   formData.append(csrfName, csrfValue)
   formData.append('oro_product_quick_add[component]', 'autocomplete')
   formData.append('oro_product_quick_add[products]', pasteString)
 
-  const submitRes = await fetch(`${base}/customer/product/quick-add/`, {
+  const submitRes = await proxyFetch(`${base}/customer/product/quick-add/`, {
     method: 'POST',
     headers: {
       'Cookie': mergedCookies,
@@ -305,7 +487,6 @@ async function handleSubmitOrder(request: Request, env: Env, origin: string): Pr
   const submitCookies = extractCookies(submitRes)
   const location = submitRes.headers.get('Location') ?? ''
 
-  // Update stored session cookies
   const updatedCookies = [mergedCookies, submitCookies].filter(Boolean).join('; ')
   const updatedSession: SessionData = { ...session, cookies: updatedCookies }
   const token = bearerToken(request)!
@@ -313,7 +494,6 @@ async function handleSubmitOrder(request: Request, env: Env, origin: string): Pr
     expirationTtl: Math.max(1, Math.round((session.expiresAt - Date.now()) / 1000)),
   })
 
-  // Check for success — typically a redirect to the shopping list or cart
   if (submitRes.status >= 300 && submitRes.status < 400) {
     return jsonResponse({
       success: true,
@@ -323,16 +503,202 @@ async function handleSubmitOrder(request: Request, env: Env, origin: string): Pr
   }
 
   if (submitRes.ok) {
+    // Check if the response is actually an Incapsula block page
+    const responseHtml = await submitRes.clone().text()
+    if (isIncapsulaBlocked(responseHtml)) {
+      return queueOrderForExtension(body.lines, env, origin)
+    }
     return jsonResponse({
       success: true,
       itemCount: body.lines.length,
     }, 200, origin, env)
   }
 
-  return jsonResponse({
-    error: `Submit returned ${submitRes.status}`,
-    redirect: location || undefined,
-  }, 502, origin, env)
+  // On failure, try extension relay as fallback
+  return queueOrderForExtension(body.lines, env, origin)
+}
+
+/** Queue order in KV for the extension to pick up and submit via real browser. */
+async function queueOrderForExtension(
+  lines: Array<{ itemNumber: string; qty: number }>,
+  env: Env,
+  origin: string,
+): Promise<Response> {
+  const orderId = `cloud-${Date.now()}`
+  const pendingOrder = {
+    orderId,
+    lines,
+    status: 'pending',
+    queuedAt: Date.now(),
+  }
+  await env.SESSIONS.put('pending-order:latest', JSON.stringify(pendingOrder), {
+    expirationTtl: 3600, // 1h TTL
+  })
+  return jsonResponse({ queued: true, orderId, itemCount: lines.length }, 202, origin, env)
+}
+
+async function handleDebugLogin(env: Env, origin: string): Promise<Response> {
+  const base = env.LACTALIS_BASE
+  const hostname = new URL(base).hostname
+
+  // Step 1: resolve DNS
+  const ip = await resolveHost(hostname)
+
+  // Step 2: fetch login page (with IP fallback)
+  try {
+    const res = await proxyFetch(`${base}/customer/user/login`, {
+      redirect: 'manual',
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+    })
+
+    const status = res.status
+    const location = res.headers.get('Location')
+    const cookies = extractCookies(res)
+    const html = await res.text()
+
+    const csrfMatch = html.match(/name="_csrf_token"\s+value="([^"]+)"/)
+      ?? html.match(/name="_csrf_token"[^>]*value="([^"]+)"/)
+      ?? html.match(/value="([^"]+)"[^>]*name="_csrf_token"/)
+    const formAction = html.match(/form[^>]*action="([^"]+)"[^>]*method="post"/i)
+      ?? html.match(/method="post"[^>]*action="([^"]+)"/i)
+    const usernameField = html.match(/name="([^"]*username[^"]*)"/)
+    const passwordField = html.match(/name="([^"]*password[^"]*)"/)
+
+    return jsonResponse({
+      resolvedIp: ip,
+      loginPageStatus: status,
+      redirectLocation: location,
+      cookiesReceived: cookies.length > 0,
+      csrfTokenFound: !!csrfMatch,
+      csrfToken: csrfMatch?.[1] ? `${csrfMatch[1].slice(0, 8)}...` : null,
+      formAction: formAction?.[1] ?? null,
+      usernameFieldName: usernameField?.[1] ?? null,
+      passwordFieldName: passwordField?.[1] ?? null,
+      htmlLength: html.length,
+      htmlTitle: html.match(/<title>([^<]+)<\/title>/i)?.[1] ?? null,
+      htmlSnippet: html.slice(0, 2000),
+    }, 200, origin, env)
+  } catch (e) {
+    return jsonResponse({
+      error: `Cannot reach Lactalis: ${(e as Error).message}`,
+      resolvedIp: ip,
+    }, 502, origin, env)
+  }
+}
+
+// ─── Extension cloud sync handlers ────────────────────────────────────────────
+
+/** POST /extension/schedule — extension pushes scraped schedule to KV */
+async function handleExtensionSchedulePush(request: Request, env: Env, origin: string): Promise<Response> {
+  if (!isExtensionAuthed(request, env)) {
+    return jsonResponse({ error: 'Unauthorized' }, 401, origin, env)
+  }
+  let body: unknown
+  try {
+    body = await request.json()
+  } catch {
+    return jsonResponse({ error: 'Invalid JSON' }, 400, origin, env)
+  }
+  await env.SESSIONS.put('schedule:latest', JSON.stringify(body), {
+    expirationTtl: 86400, // 24h TTL
+  })
+  return jsonResponse({ ok: true }, 200, origin, env)
+}
+
+/** GET /extension/pending-order — extension polls for pending orders */
+async function handleExtensionPendingOrder(request: Request, env: Env, origin: string): Promise<Response> {
+  if (!isExtensionAuthed(request, env)) {
+    return jsonResponse({ error: 'Unauthorized' }, 401, origin, env)
+  }
+  const raw = await env.SESSIONS.get('pending-order:latest')
+  if (!raw) {
+    return jsonResponse({ order: null }, 200, origin, env)
+  }
+  try {
+    const order = JSON.parse(raw)
+    return jsonResponse({ order }, 200, origin, env)
+  } catch {
+    return jsonResponse({ order: null }, 200, origin, env)
+  }
+}
+
+/** POST /extension/order-result — extension pushes submission result */
+async function handleExtensionOrderResult(request: Request, env: Env, origin: string): Promise<Response> {
+  if (!isExtensionAuthed(request, env)) {
+    return jsonResponse({ error: 'Unauthorized' }, 401, origin, env)
+  }
+  let body: { orderId?: string; success?: boolean; lactalisRef?: string; error?: string }
+  try {
+    body = await request.json()
+  } catch {
+    return jsonResponse({ error: 'Invalid JSON' }, 400, origin, env)
+  }
+
+  // Update the pending order status in KV
+  const raw = await env.SESSIONS.get('pending-order:latest')
+  if (raw) {
+    try {
+      const order = JSON.parse(raw)
+      order.status = body.success ? 'completed' : 'failed'
+      order.lactalisRef = body.lactalisRef ?? null
+      order.error = body.error ?? null
+      order.completedAt = Date.now()
+      await env.SESSIONS.put('pending-order:latest', JSON.stringify(order), {
+        expirationTtl: 3600, // Keep result for 1h
+      })
+    } catch {
+      // Ignore parse errors
+    }
+  }
+
+  return jsonResponse({ ok: true }, 200, origin, env)
+}
+
+/** POST /extension/cookies — extension pushes Lactalis session cookies */
+async function handleExtensionCookies(request: Request, env: Env, origin: string): Promise<Response> {
+  if (!isExtensionAuthed(request, env)) {
+    return jsonResponse({ error: 'Unauthorized' }, 401, origin, env)
+  }
+  let body: { cookies?: string }
+  try {
+    body = await request.json()
+  } catch {
+    return jsonResponse({ error: 'Invalid JSON' }, 400, origin, env)
+  }
+  if (!body.cookies) {
+    return jsonResponse({ error: 'cookies required' }, 400, origin, env)
+  }
+  await env.SESSIONS.put('cookies:lactalis', body.cookies, {
+    expirationTtl: 3600, // 1h TTL
+  })
+  return jsonResponse({ ok: true }, 200, origin, env)
+}
+
+/** GET /extension/order-status — PWA polls for order completion */
+async function handleExtensionOrderStatus(request: Request, env: Env, origin: string): Promise<Response> {
+  // Require either a valid session token or extension secret
+  const token = bearerToken(request)
+  const session = await getSession(token, env)
+  if (!session && !isExtensionAuthed(request, env)) {
+    return jsonResponse({ error: 'Unauthorized' }, 401, origin, env)
+  }
+  const raw = await env.SESSIONS.get('pending-order:latest')
+  if (!raw) {
+    return jsonResponse({ order: null }, 200, origin, env)
+  }
+  try {
+    const order = JSON.parse(raw)
+    return jsonResponse({
+      orderId: order.orderId,
+      status: order.status,
+      lactalisRef: order.lactalisRef ?? null,
+      error: order.error ?? null,
+      queuedAt: order.queuedAt,
+      completedAt: order.completedAt ?? null,
+    }, 200, origin, env)
+  } catch {
+    return jsonResponse({ order: null }, 200, origin, env)
+  }
 }
 
 // ─── Main fetch handler ───────────────────────────────────────────────────────
@@ -361,8 +727,36 @@ export default {
           if (request.method !== 'POST') break
           return handleSubmitOrder(request, env, origin)
 
+        case '/debug-login':
+          if (request.method !== 'GET') break
+          if (!isExtensionAuthed(request, env)) {
+            return jsonResponse({ error: 'Unauthorized' }, 401, origin, env)
+          }
+          return handleDebugLogin(env, origin)
+
         case '/health':
           return jsonResponse({ ok: true, time: Date.now() }, 200, origin, env)
+
+        // Extension cloud sync routes
+        case '/extension/schedule':
+          if (request.method !== 'POST') break
+          return handleExtensionSchedulePush(request, env, origin)
+
+        case '/extension/pending-order':
+          if (request.method !== 'GET') break
+          return handleExtensionPendingOrder(request, env, origin)
+
+        case '/extension/order-result':
+          if (request.method !== 'POST') break
+          return handleExtensionOrderResult(request, env, origin)
+
+        case '/extension/cookies':
+          if (request.method !== 'POST') break
+          return handleExtensionCookies(request, env, origin)
+
+        case '/extension/order-status':
+          if (request.method !== 'GET') break
+          return handleExtensionOrderStatus(request, env, origin)
       }
 
       return jsonResponse({ error: 'Not found' }, 404, origin, env)
