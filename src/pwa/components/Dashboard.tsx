@@ -39,7 +39,8 @@ import { db } from '../lib/db'
 import { generateForecasts, getSettings, type Forecast } from '../lib/forecastEngine'
 import { analyzeHistory } from '../lib/historyAnalyzer'
 import { AVG_DELIVERY_COST, nextDeliveryDate, friendlyError } from '../lib/constants'
-import { getExtensionStatus, triggerScheduleRefresh } from '../lib/extensionSync'
+import { getExtensionStatus, triggerScheduleRefresh, applyWorkerSchedule } from '../lib/extensionSync'
+import { hasActiveSession } from '../lib/lactalisApi'
 import type { Order } from '../lib/types'
 
 const STATUS_BADGE: Record<Order['status'], string> = {
@@ -241,11 +242,25 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
 
   async function handleRefreshSchedule() {
     setRefreshingSchedule(true)
-    triggerScheduleRefresh()
-    setTimeout(async () => {
-      setExtStatus(await getExtensionStatus())
+
+    if (extStatus?.connected) {
+      // Use extension path
+      triggerScheduleRefresh()
+      setTimeout(async () => {
+        setExtStatus(await getExtensionStatus())
+        setRefreshingSchedule(false)
+      }, 3000)
+    } else if (hasActiveSession()) {
+      // Use Worker proxy path
+      try {
+        await applyWorkerSchedule()
+      } catch {
+        // silently fail — schedule will remain unchanged
+      }
       setRefreshingSchedule(false)
-    }, 3000)
+    } else {
+      setRefreshingSchedule(false)
+    }
   }
 
   // ── Next delivery display ──────────────────────────────────────────────────
@@ -334,22 +349,22 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
           </div>
         </div>
 
-        {/* Extension status */}
+        {/* Extension / Worker status */}
         {extStatus !== null && (
           <div className="flex items-center justify-between mt-2">
             <div className="flex items-center gap-1.5">
               <div className={`w-1.5 h-1.5 rounded-full ${
                 extStatus.connected
                   ? extStatus.lactalisLoggedIn ? 'bg-green-500' : 'bg-amber-400'
-                  : 'bg-gray-300'
+                  : hasActiveSession() ? 'bg-green-500' : 'bg-gray-300'
               }`} />
               <span className="text-[11px] text-gray-500">
                 {extStatus.connected
                   ? extStatus.lactalisLoggedIn ? 'Lactalis live' : 'Extension connected'
-                  : 'Extension not found'}
+                  : hasActiveSession() ? 'Lactalis via Worker' : 'Not connected'}
               </span>
             </div>
-            {extStatus.connected ? (
+            {extStatus.connected || hasActiveSession() ? (
               <button
                 onClick={handleRefreshSchedule}
                 disabled={refreshingSchedule}

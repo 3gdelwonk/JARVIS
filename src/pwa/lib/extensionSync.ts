@@ -9,6 +9,7 @@
 
 import { db } from './db'
 import type { DeliverySlot } from './types'
+import { hasActiveSession, fetchDeliverySchedule } from './lactalisApi'
 
 const STATUS_KEY   = 'milk-manager-status-updates'
 const SCHEDULE_KEY = 'milk-manager-schedule-from-extension'
@@ -74,6 +75,12 @@ export async function applyStatusUpdates(): Promise<number> {
  */
 export async function applyExtensionSchedule(): Promise<number> {
   const raw = localStorage.getItem(SCHEDULE_KEY)
+
+  // If no extension data and a Lactalis Worker session exists, fetch via Worker
+  if (!raw && hasActiveSession()) {
+    return applyWorkerSchedule()
+  }
+
   if (!raw) return 0
 
   let schedule: { nextDelivery?: ScrapedSlot; upcomingDeliveries?: ScrapedSlot[] }
@@ -88,6 +95,27 @@ export async function applyExtensionSchedule(): Promise<number> {
 
   if (slots.length === 0) return 0
 
+  return upsertSlots(slots)
+}
+
+/**
+ * Fetch delivery schedule via the Cloudflare Worker proxy and upsert slots.
+ */
+export async function applyWorkerSchedule(): Promise<number> {
+  const { slots, error } = await fetchDeliverySchedule()
+  if (error || slots.length === 0) return 0
+
+  const mapped: ScrapedSlot[] = slots.map((s) => ({
+    deliveryDate: s.deliveryDate,
+    orderCutoffDate: s.cutoffDate,
+    orderCutoffTime: s.cutoffTime,
+  }))
+
+  return upsertSlots(mapped)
+}
+
+/** Shared upsert logic for scraped or worker-fetched slots. */
+async function upsertSlots(slots: ScrapedSlot[]): Promise<number> {
   let upserted = 0
   for (const slot of slots) {
     if (!slot.deliveryDate) continue

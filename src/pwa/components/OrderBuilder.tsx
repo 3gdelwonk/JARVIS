@@ -34,6 +34,7 @@ import { generateForecasts, getSettings, type Forecast } from '../lib/forecastEn
 import { db } from '../lib/db'
 import { AVG_DELIVERY_COST, nextDeliveryDate, friendlyError } from '../lib/constants'
 import type { Order, OrderLine } from '../lib/types'
+import { hasActiveSession, submitOrderToLactalis } from '../lib/lactalisApi'
 
 const STATUS_BADGE: Record<Order['status'], string> = {
   draft:      'bg-gray-100 text-gray-600',
@@ -328,6 +329,8 @@ function ExportView({ orderId, onBack, onReceive }: ExportViewProps) {
   const [copied, setCopied] = useState<'paste' | 'csv' | null>(null)
   const [submitted, setSubmitted] = useState(false)
   const [statusSaving, setStatusSaving] = useState(false)
+  const [workerSubmitting, setWorkerSubmitting] = useState(false)
+  const [workerSubmitResult, setWorkerSubmitResult] = useState<{ ok: boolean; msg: string } | null>(null)
 
   const order = useLiveQuery(() => db.orders.get(orderId), [orderId])
   const lines = useLiveQuery(
@@ -381,6 +384,23 @@ function ExportView({ orderId, onBack, onReceive }: ExportViewProps) {
       await db.orders.update(orderId, { status: 'submitted', submittedAt: new Date() })
     } finally {
       setStatusSaving(false)
+    }
+  }
+
+  async function handleWorkerSubmit() {
+    if (!lines) return
+    setWorkerSubmitting(true)
+    setWorkerSubmitResult(null)
+    const orderLines = lines.filter((l) => l.approvedQty > 0)
+    const { success, error } = await submitOrderToLactalis(
+      orderLines.map((l) => ({ itemNumber: l.itemNumber, qty: l.approvedQty })),
+    )
+    setWorkerSubmitting(false)
+    if (success) {
+      setWorkerSubmitResult({ ok: true, msg: 'Order submitted to Lactalis!' })
+      await db.orders.update(orderId, { status: 'submitted', submittedAt: new Date() })
+    } else {
+      setWorkerSubmitResult({ ok: false, msg: error ?? 'Submission failed' })
     }
   }
 
@@ -463,6 +483,45 @@ function ExportView({ orderId, onBack, onReceive }: ExportViewProps) {
             Open Lactalis Portal →
           </a>
 
+          {/* Submit to Lactalis via Worker (works on phone) */}
+          {hasActiveSession() && (
+            <>
+              <button
+                onClick={handleWorkerSubmit}
+                disabled={workerSubmitting || order.status !== 'approved'}
+                className={`w-full flex flex-col items-center justify-center py-2.5 rounded-xl text-sm font-medium transition-colors ${
+                  workerSubmitResult?.ok
+                    ? 'bg-green-100 text-green-700'
+                    : workerSubmitting
+                      ? 'bg-blue-500 text-white'
+                      : order.status !== 'approved'
+                        ? 'bg-gray-100 text-gray-400'
+                        : 'bg-blue-600 text-white'
+                }`}
+              >
+                {workerSubmitting ? (
+                  <span className="flex items-center gap-2">
+                    <RefreshCw size={14} className="animate-spin" />
+                    Submitting to Lactalis…
+                  </span>
+                ) : workerSubmitResult?.ok ? (
+                  <span className="flex items-center gap-2">
+                    <CheckCircle2 size={15} />
+                    Submitted to Lactalis!
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-2">
+                    <ExternalLink size={15} />
+                    Submit to Lactalis
+                  </span>
+                )}
+              </button>
+              {workerSubmitResult && !workerSubmitResult.ok && (
+                <p className="text-[11px] text-red-500 text-center">{workerSubmitResult.msg}</p>
+              )}
+            </>
+          )}
+
           {/* Auto-submit via extension (desktop only) */}
           <button
             onClick={handleSubmitToLactalis}
@@ -472,7 +531,7 @@ function ExportView({ orderId, onBack, onReceive }: ExportViewProps) {
                 ? 'bg-green-100 text-green-700'
                 : order.status !== 'approved'
                   ? 'bg-gray-100 text-gray-400'
-                  : 'bg-blue-600 text-white'
+                  : hasActiveSession() ? 'bg-gray-100 text-gray-500' : 'bg-blue-600 text-white'
             }`}
           >
             <span className="flex items-center gap-2">
