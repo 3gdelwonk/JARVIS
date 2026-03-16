@@ -35,7 +35,7 @@ async function callGeminiVision(prompt: string, base64: string, mediaType: strin
   const apiKey = localStorage.getItem(API_KEY_STORAGE)
   if (!apiKey) throw new Error('No Gemini API key set — add it in Settings')
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

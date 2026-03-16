@@ -224,7 +224,7 @@ export default function InsightsTab() {
       const systemPrompt = `You are an AI analyst for a small IGA supermarket's milk department. You have access to the store's live data below. Answer questions concisely and helpfully. Use specific numbers from the data. When making recommendations, explain why clearly.\n\n${context}`
 
       const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent?key=${encodeURIComponent(apiKey)}&alt=sse`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?key=${encodeURIComponent(apiKey)}&alt=sse`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

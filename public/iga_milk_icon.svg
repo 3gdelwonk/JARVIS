@@ -1,0 +1,13 @@
+<svg width="1024" height="1024" viewBox="0 0 180 180" xmlns="http://www.w3.org/2000/svg">
+  <rect width="180" height="180" rx="38" fill="#0057A8"/>
+  <g transform="translate(90,100)">
+    <rect x="-22" y="-78" width="44" height="16" rx="7" fill="white"/>
+    <path d="
+      M -13,-62 L -13,-46
+      C -13,-34 -34,-28 -34,-14
+      L -34,46 Q -34,58 -22,58 L 22,58 Q 34,58 34,46
+      L 34,-14 C 34,-28 13,-34 13,-46
+      L 13,-62 Z
+    " fill="white"/>
+  </g>
+</svg>
