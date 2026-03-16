@@ -39,8 +39,7 @@ import { db } from '../lib/db'
 import { generateForecasts, getSettings, type Forecast } from '../lib/forecastEngine'
 import { analyzeHistory } from '../lib/historyAnalyzer'
 import { AVG_DELIVERY_COST, nextDeliveryDate, friendlyError } from '../lib/constants'
-import { getExtensionStatus, triggerScheduleRefresh, applyWorkerSchedule } from '../lib/extensionSync'
-import { hasActiveSession } from '../lib/lactalisApi'
+import { getExtensionStatus, triggerScheduleRefresh, fetchCloudSchedule } from '../lib/extensionSync'
 import type { Order } from '../lib/types'
 
 const STATUS_BADGE: Record<Order['status'], string> = {
@@ -235,30 +234,29 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
     return () => { cancelled = true }
   }, [])
 
-  // Async: extension status check on mount
+  // Async: extension status check on mount + cloud schedule fallback
   useEffect(() => {
-    getExtensionStatus().then(setExtStatus)
+    getExtensionStatus().then((status) => {
+      setExtStatus(status)
+      // If extension not connected locally, try cloud schedule
+      if (!status.connected) {
+        fetchCloudSchedule()
+      }
+    })
   }, [])
 
   async function handleRefreshSchedule() {
     setRefreshingSchedule(true)
 
     if (extStatus?.connected) {
-      // Use extension path
       triggerScheduleRefresh()
       setTimeout(async () => {
         setExtStatus(await getExtensionStatus())
         setRefreshingSchedule(false)
       }, 3000)
-    } else if (hasActiveSession()) {
-      // Use Worker proxy path
-      try {
-        await applyWorkerSchedule()
-      } catch {
-        // silently fail — schedule will remain unchanged
-      }
-      setRefreshingSchedule(false)
     } else {
+      // Try cloud schedule when extension not connected
+      await fetchCloudSchedule()
       setRefreshingSchedule(false)
     }
   }
@@ -349,41 +347,29 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
           </div>
         </div>
 
-        {/* Extension / Worker status */}
+        {/* Extension status */}
         {extStatus !== null && (
           <div className="flex items-center justify-between mt-2">
             <div className="flex items-center gap-1.5">
               <div className={`w-1.5 h-1.5 rounded-full ${
                 extStatus.connected
                   ? extStatus.lactalisLoggedIn ? 'bg-green-500' : 'bg-amber-400'
-                  : hasActiveSession() ? 'bg-green-500' : 'bg-gray-300'
+                  : 'bg-gray-300'
               }`} />
               <span className="text-[11px] text-gray-500">
                 {extStatus.connected
                   ? extStatus.lactalisLoggedIn ? 'Lactalis live' : 'Extension connected'
-                  : hasActiveSession() ? 'Lactalis via Worker' : 'Not connected'}
+                  : 'Not connected'}
               </span>
             </div>
-            {extStatus.connected || hasActiveSession() ? (
-              <button
-                onClick={handleRefreshSchedule}
-                disabled={refreshingSchedule}
-                className="flex items-center gap-1 text-[11px] text-blue-600 disabled:text-gray-400"
-              >
-                <RefreshCw size={10} className={refreshingSchedule ? 'animate-spin' : ''} />
-                Refresh Schedule
-              </button>
-            ) : (
-              <a
-                href="https://my.lactalis.com.au"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-1 text-[11px] text-blue-600"
-              >
-                <ExternalLink size={10} />
-                Open Portal
-              </a>
-            )}
+            <button
+              onClick={handleRefreshSchedule}
+              disabled={refreshingSchedule}
+              className="flex items-center gap-1 text-[11px] text-blue-600 disabled:text-gray-400"
+            >
+              <RefreshCw size={10} className={refreshingSchedule ? 'animate-spin' : ''} />
+              {extStatus.connected ? 'Refresh Schedule' : 'Sync from Cloud'}
+            </button>
           </div>
         )}
 

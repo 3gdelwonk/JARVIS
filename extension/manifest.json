@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Auto-fill Lactalis Quick Order from approved orders built in the PWA",
 
-  "permissions": ["storage", "activeTab", "scripting", "tabs"],
+  "permissions": ["storage", "activeTab", "scripting", "tabs", "cookies", "alarms"],
   "host_permissions": [
     "https://*.lactalis.com.au/*",
     "https://mylactalis.com.au/*",

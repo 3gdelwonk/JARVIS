@@ -285,6 +285,31 @@
     </div>
   </div>
 
+  <!-- Cloud Sync config -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-label">Cloud Sync</span>
+      <span class="section-action" id="cloud-status" style="cursor:default; color:#9ca3af">Not configured</span>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:5px;">
+      <input
+        id="cloud-worker-url"
+        type="text"
+        placeholder="Worker URL (e.g. https://proxy.workers.dev)"
+        style="width:100%; border:1px solid #d1d5db; border-radius:6px; padding:6px 8px; font-size:11px; outline:none;"
+      />
+      <input
+        id="cloud-secret"
+        type="password"
+        placeholder="Extension Secret"
+        style="width:100%; border:1px solid #d1d5db; border-radius:6px; padding:6px 8px; font-size:11px; outline:none;"
+      />
+      <button class="btn btn-primary" id="cloud-save-btn" style="padding:6px 10px; font-size:11px;">
+        Save Cloud Config
+      </button>
+    </div>
+  </div>
+
   <!-- Footer -->
   <div class="footer">
     <a class="footer-link" href="https://3gdelwonk.github.io/JARVIS/" target="_blank" id="pwa-link">

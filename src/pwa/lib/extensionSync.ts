@@ -9,7 +9,6 @@
 
 import { db } from './db'
 import type { DeliverySlot } from './types'
-import { hasActiveSession, fetchDeliverySchedule } from './lactalisApi'
 
 const STATUS_KEY   = 'milk-manager-status-updates'
 const SCHEDULE_KEY = 'milk-manager-schedule-from-extension'
@@ -75,12 +74,6 @@ export async function applyStatusUpdates(): Promise<number> {
  */
 export async function applyExtensionSchedule(): Promise<number> {
   const raw = localStorage.getItem(SCHEDULE_KEY)
-
-  // If no extension data and a Lactalis Worker session exists, fetch via Worker
-  if (!raw && hasActiveSession()) {
-    return applyWorkerSchedule()
-  }
-
   if (!raw) return 0
 
   let schedule: { nextDelivery?: ScrapedSlot; upcomingDeliveries?: ScrapedSlot[] }
@@ -98,23 +91,7 @@ export async function applyExtensionSchedule(): Promise<number> {
   return upsertSlots(slots)
 }
 
-/**
- * Fetch delivery schedule via the Cloudflare Worker proxy and upsert slots.
- */
-export async function applyWorkerSchedule(): Promise<number> {
-  const { slots, error } = await fetchDeliverySchedule()
-  if (error || slots.length === 0) return 0
-
-  const mapped: ScrapedSlot[] = slots.map((s) => ({
-    deliveryDate: s.deliveryDate,
-    orderCutoffDate: s.cutoffDate,
-    orderCutoffTime: s.cutoffTime,
-  }))
-
-  return upsertSlots(mapped)
-}
-
-/** Shared upsert logic for scraped or worker-fetched slots. */
+/** Upsert scraped delivery slots into the database. */
 async function upsertSlots(slots: ScrapedSlot[]): Promise<number> {
   let upserted = 0
   for (const slot of slots) {
@@ -175,4 +152,87 @@ export function triggerScheduleRefresh() {
 /** Ask the extension to open the Lactalis Quick Order page and auto-submit. */
 export function triggerOrderSubmit() {
   window.dispatchEvent(new CustomEvent('milk-manager-submit-order'))
+}
+
+// ─── Cloud relay functions (via Cloudflare Worker) ──────────────────────────
+
+function getWorkerUrl(): string | null {
+  return localStorage.getItem('milk-manager-worker-url')?.replace(/\/+$/, '') || null
+}
+
+/**
+ * Fetch schedule from the Worker (which checks KV cache first).
+ * Returns number of slots upserted, or 0 if unavailable.
+ */
+export async function fetchCloudSchedule(): Promise<number> {
+  const base = getWorkerUrl()
+  if (!base) return 0
+
+  try {
+    const res = await fetch(`${base}/schedule`)
+    if (!res.ok) return 0
+    const data = await res.json()
+
+    // The cloud cache returns the same format as the extension schedule
+    const slots: ScrapedSlot[] = data.upcomingDeliveries
+      ?? (data.nextDelivery ? [data.nextDelivery] : [])
+      ?? (data.slots ?? []).map((s: { deliveryDate: string }) => ({ deliveryDate: s.deliveryDate }))
+
+    if (slots.length === 0) return 0
+    return upsertSlots(slots)
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * Submit order via the Worker. If Incapsula blocks direct submission,
+ * the Worker queues the order in KV for the extension to pick up.
+ * Returns { success, queued, orderId } or throws.
+ */
+export async function submitOrderViaCloud(
+  lines: Array<{ itemNumber: string; qty: number }>,
+): Promise<{ success: boolean; queued: boolean; orderId?: string }> {
+  const base = getWorkerUrl()
+  if (!base) throw new Error('Worker URL not configured')
+
+  const res = await fetch(`${base}/submit-order`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ lines }),
+  })
+
+  const data = await res.json()
+
+  if (res.status === 202 && data.queued) {
+    return { success: false, queued: true, orderId: data.orderId }
+  }
+
+  if (data.success) {
+    return { success: true, queued: false }
+  }
+
+  throw new Error(data.error || `Submit failed (${res.status})`)
+}
+
+/**
+ * Poll the Worker for order completion status.
+ * Returns the current status of the pending cloud order.
+ */
+export async function pollOrderStatus(): Promise<{
+  orderId: string | null
+  status: string | null
+  lactalisRef: string | null
+  error: string | null
+} | null> {
+  const base = getWorkerUrl()
+  if (!base) return null
+
+  try {
+    const res = await fetch(`${base}/extension/order-status`)
+    if (!res.ok) return null
+    return res.json()
+  } catch {
+    return null
+  }
 }

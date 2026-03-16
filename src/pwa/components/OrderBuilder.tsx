@@ -33,8 +33,8 @@ import {
 import { generateForecasts, getSettings, type Forecast } from '../lib/forecastEngine'
 import { db } from '../lib/db'
 import { AVG_DELIVERY_COST, nextDeliveryDate, friendlyError } from '../lib/constants'
+import { submitOrderViaCloud, pollOrderStatus } from '../lib/extensionSync'
 import type { Order, OrderLine } from '../lib/types'
-import { hasActiveSession, submitOrderToLactalis } from '../lib/lactalisApi'
 
 const STATUS_BADGE: Record<Order['status'], string> = {
   draft:      'bg-gray-100 text-gray-600',
@@ -326,11 +326,12 @@ interface ExportViewProps {
 }
 
 function ExportView({ orderId, onBack, onReceive }: ExportViewProps) {
-  const [copied, setCopied] = useState<'paste' | 'csv' | null>(null)
+  const [copied, setCopied] = useState<'paste' | 'csv' | 'portal' | null>(null)
   const [submitted, setSubmitted] = useState(false)
   const [statusSaving, setStatusSaving] = useState(false)
-  const [workerSubmitting, setWorkerSubmitting] = useState(false)
-  const [workerSubmitResult, setWorkerSubmitResult] = useState<{ ok: boolean; msg: string } | null>(null)
+  const [cloudStatus, setCloudStatus] = useState<'idle' | 'submitting' | 'waiting' | 'success' | 'error'>('idle')
+  const [cloudMessage, setCloudMessage] = useState('')
+  const cloudAbortedRef = useRef(false)
 
   const order = useLiveQuery(() => db.orders.get(orderId), [orderId])
   const lines = useLiveQuery(
@@ -387,20 +388,90 @@ function ExportView({ orderId, onBack, onReceive }: ExportViewProps) {
     }
   }
 
-  async function handleWorkerSubmit() {
+  async function handleCopyAndOpenPortal() {
+    await navigator.clipboard.writeText(pasteStr)
+    window.open('https://mylactalis.com.au/customer/product/quick-add/', '_blank')
+    setCopied('portal')
+    setTimeout(() => setCopied(null), 4000)
+  }
+
+  function handleCancelCloud() {
+    cloudAbortedRef.current = true
+    setCloudStatus('idle')
+    setCloudMessage('')
+  }
+
+  async function handleCloudSubmit() {
     if (!lines) return
-    setWorkerSubmitting(true)
-    setWorkerSubmitResult(null)
-    const orderLines = lines.filter((l) => l.approvedQty > 0)
-    const { success, error } = await submitOrderToLactalis(
-      orderLines.map((l) => ({ itemNumber: l.itemNumber, qty: l.approvedQty })),
-    )
-    setWorkerSubmitting(false)
-    if (success) {
-      setWorkerSubmitResult({ ok: true, msg: 'Order submitted to Lactalis!' })
-      await db.orders.update(orderId, { status: 'submitted', submittedAt: new Date() })
-    } else {
-      setWorkerSubmitResult({ ok: false, msg: error ?? 'Submission failed' })
+    cloudAbortedRef.current = false
+    setCloudStatus('submitting')
+    setCloudMessage('Submitting to Worker...')
+
+    try {
+      const cloudLines = activeLines.map((l) => ({ itemNumber: l.itemNumber, qty: l.approvedQty }))
+      const result = await submitOrderViaCloud(cloudLines)
+
+      if (cloudAbortedRef.current) return
+
+      if (result.success) {
+        setCloudStatus('success')
+        setCloudMessage('Submitted directly!')
+        await db.orders.update(orderId, { status: 'submitted', submittedAt: new Date() })
+        return
+      }
+
+      if (result.queued) {
+        setCloudStatus('waiting')
+
+        // Exponential backoff: 5s, 10s, 15s, 20s, 30s (cap)
+        const BACKOFF = [5, 10, 15, 20, 30]
+        const MAX_WAIT_MS = 3 * 60 * 1000 // 3 minutes
+        let elapsed = 0
+        let attempt = 0
+
+        while (elapsed < MAX_WAIT_MS) {
+          if (cloudAbortedRef.current) return
+          const delaySec = BACKOFF[Math.min(attempt, BACKOFF.length - 1)]
+          attempt++
+          const maxAttempts = Math.ceil(MAX_WAIT_MS / (delaySec * 1000))
+          setCloudMessage(`Checking... (attempt ${attempt}/${Math.min(attempt + maxAttempts - 1, 99)})`)
+
+          await new Promise((r) => setTimeout(r, delaySec * 1000))
+          elapsed += delaySec * 1000
+          if (cloudAbortedRef.current) return
+
+          const status = await pollOrderStatus()
+          if (cloudAbortedRef.current) return
+          if (!status) continue
+
+          if (status.status === 'completed') {
+            setCloudStatus('success')
+            setCloudMessage(status.lactalisRef ? `Submitted! Ref: ${status.lactalisRef}` : 'Submitted!')
+            await db.orders.update(orderId, {
+              status: 'submitted',
+              submittedAt: new Date(),
+              lactalisOrderNumber: status.lactalisRef ?? undefined,
+            })
+            return
+          }
+
+          if (status.status === 'failed') {
+            setCloudStatus('error')
+            setCloudMessage(status.error || 'Extension failed to submit')
+            return
+          }
+        }
+
+        if (!cloudAbortedRef.current) {
+          setCloudStatus('error')
+          setCloudMessage('Timed out waiting for extension')
+        }
+      }
+    } catch (e) {
+      if (!cloudAbortedRef.current) {
+        setCloudStatus('error')
+        setCloudMessage(e instanceof Error ? e.message : 'Cloud submit failed')
+      }
     }
   }
 
@@ -469,60 +540,67 @@ function ExportView({ orderId, onBack, onReceive }: ExportViewProps) {
             </button>
           </div>
 
-          {/* Open portal link — always available */}
-          <p className="text-[11px] text-gray-400">
-            Copy the paste string above, then open the Lactalis portal to submit.
-          </p>
-          <a
-            href="https://my.lactalis.com.au"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium border border-blue-300 text-blue-700 bg-blue-50"
+          {/* Copy & Open Portal — primary action */}
+          <button
+            onClick={handleCopyAndOpenPortal}
+            disabled={!pasteStr}
+            className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-semibold transition-colors ${
+              copied === 'portal'
+                ? 'bg-green-100 text-green-700'
+                : !pasteStr
+                  ? 'bg-gray-100 text-gray-400'
+                  : 'bg-blue-600 text-white'
+            }`}
           >
             <ExternalLink size={15} />
-            Open Lactalis Portal →
-          </a>
-
-          {/* Submit to Lactalis via Worker (works on phone) */}
-          {hasActiveSession() && (
-            <>
-              <button
-                onClick={handleWorkerSubmit}
-                disabled={workerSubmitting || order.status !== 'approved'}
-                className={`w-full flex flex-col items-center justify-center py-2.5 rounded-xl text-sm font-medium transition-colors ${
-                  workerSubmitResult?.ok
-                    ? 'bg-green-100 text-green-700'
-                    : workerSubmitting
-                      ? 'bg-blue-500 text-white'
-                      : order.status !== 'approved'
-                        ? 'bg-gray-100 text-gray-400'
-                        : 'bg-blue-600 text-white'
-                }`}
-              >
-                {workerSubmitting ? (
-                  <span className="flex items-center gap-2">
-                    <RefreshCw size={14} className="animate-spin" />
-                    Submitting to Lactalis…
-                  </span>
-                ) : workerSubmitResult?.ok ? (
-                  <span className="flex items-center gap-2">
-                    <CheckCircle2 size={15} />
-                    Submitted to Lactalis!
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-2">
-                    <ExternalLink size={15} />
-                    Submit to Lactalis
-                  </span>
-                )}
-              </button>
-              {workerSubmitResult && !workerSubmitResult.ok && (
-                <p className="text-[11px] text-red-500 text-center">{workerSubmitResult.msg}</p>
-              )}
-            </>
+            {copied === 'portal' ? 'Copied! Paste into Quick Order field' : 'Copy Order & Open Lactalis Portal →'}
+          </button>
+          {copied !== 'portal' && (
+            <p className="text-[11px] text-gray-400 text-center">
+              Copies order to clipboard and opens the Lactalis Quick Order page
+            </p>
           )}
 
-          {/* Auto-submit via extension (desktop only) */}
+          {/* Cloud relay submit (works from phone) */}
+          <button
+            onClick={handleCloudSubmit}
+            disabled={order.status !== 'approved' || cloudStatus === 'submitting' || cloudStatus === 'waiting' || cloudStatus === 'success'}
+            className={`w-full flex flex-col items-center justify-center py-3 rounded-xl text-sm font-semibold transition-colors ${
+              cloudStatus === 'success'
+                ? 'bg-green-100 text-green-700'
+                : cloudStatus === 'error'
+                  ? 'bg-red-50 text-red-600'
+                  : cloudStatus === 'waiting'
+                    ? 'bg-amber-50 text-amber-700'
+                    : cloudStatus === 'submitting'
+                      ? 'bg-blue-50 text-blue-600'
+                      : order.status !== 'approved'
+                        ? 'bg-gray-100 text-gray-400'
+                        : 'bg-purple-600 text-white'
+            }`}
+          >
+            <span className="flex items-center gap-2">
+              {cloudStatus === 'waiting' && <RefreshCw size={14} className="animate-spin" />}
+              {cloudStatus === 'success' && <CheckCircle2 size={14} />}
+              {cloudStatus === 'idle' && <ExternalLink size={15} />}
+              {cloudStatus === 'submitting' && <RefreshCw size={14} className="animate-spin" />}
+              {cloudStatus === 'error' && <AlertTriangle size={14} />}
+              {cloudStatus === 'idle' ? 'Submit via Cloud Relay' : cloudMessage}
+            </span>
+            {cloudStatus === 'idle' && (
+              <span className="text-[10px] opacity-70 mt-0.5">Works from phone — routes through desktop extension</span>
+            )}
+          </button>
+          {cloudStatus === 'waiting' && (
+            <button
+              onClick={handleCancelCloud}
+              className="w-full py-2 rounded-xl text-xs font-medium text-gray-500 border border-gray-200 bg-white"
+            >
+              Cancel
+            </button>
+          )}
+
+          {/* Auto-submit via extension (desktop only, same-machine) */}
           <button
             onClick={handleSubmitToLactalis}
             disabled={order.status !== 'approved'}
@@ -531,7 +609,7 @@ function ExportView({ orderId, onBack, onReceive }: ExportViewProps) {
                 ? 'bg-green-100 text-green-700'
                 : order.status !== 'approved'
                   ? 'bg-gray-100 text-gray-400'
-                  : hasActiveSession() ? 'bg-gray-100 text-gray-500' : 'bg-blue-600 text-white'
+                  : 'bg-gray-100 text-gray-500'
             }`}
           >
             <span className="flex items-center gap-2">

@@ -304,6 +304,35 @@ pasteLoadBtn.addEventListener('click', () => {
   })
 })
 
+// ─── Cloud Sync config ────────────────────────────────────────────────────────
+
+const cloudWorkerUrl = document.getElementById('cloud-worker-url')
+const cloudSecret    = document.getElementById('cloud-secret')
+const cloudSaveBtn   = document.getElementById('cloud-save-btn')
+const cloudStatus    = document.getElementById('cloud-status')
+
+async function loadCloudConfig() {
+  const r = await chrome.storage.local.get(['workerUrl', 'extensionSecret'])
+  if (r.workerUrl)        cloudWorkerUrl.value = r.workerUrl
+  if (r.extensionSecret)  cloudSecret.value = r.extensionSecret
+  cloudStatus.textContent = (r.workerUrl && r.extensionSecret) ? 'Configured' : 'Not configured'
+  cloudStatus.style.color = (r.workerUrl && r.extensionSecret) ? '#16a34a' : '#9ca3af'
+}
+
+cloudSaveBtn.addEventListener('click', () => {
+  const url = cloudWorkerUrl.value.trim()
+  const secret = cloudSecret.value.trim()
+  if (!url || !secret) {
+    showToast('Enter both Worker URL and Secret')
+    return
+  }
+  chrome.storage.local.set({ workerUrl: url, extensionSecret: secret }, () => {
+    cloudStatus.textContent = 'Configured'
+    cloudStatus.style.color = '#16a34a'
+    showToast('Cloud config saved')
+  })
+})
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
 async function init() {
@@ -311,6 +340,7 @@ async function init() {
   renderStatus(storage.lactalisTab)
   renderDelivery(storage.schedule)
   renderOrder(storage.pendingOrder)
+  loadCloudConfig()
 }
 
 init()

@@ -7,7 +7,142 @@
  *  3. Update action badge to show pending item count
  *  4. Receive schedule data scraped from Lactalis (Session 12)
  *  5. Relay fill commands to the Lactalis content script (Session 13)
+ *  6. Cloud sync via Cloudflare Worker KV (push schedule, poll orders, push cookies)
  */
+
+// ─── Cloud sync helpers ──────────────────────────────────────────────────────
+
+async function getCloudConfig() {
+  const r = await chrome.storage.local.get(['workerUrl', 'extensionSecret'])
+  if (r.workerUrl && r.extensionSecret) return r
+  return null
+}
+
+async function cloudFetch(path, options = {}) {
+  const config = await getCloudConfig()
+  if (!config) return null
+
+  const url = config.workerUrl.replace(/\/+$/, '') + path
+  const headers = {
+    'Authorization': `Bearer ${config.extensionSecret}`,
+    'Content-Type': 'application/json',
+    ...(options.headers || {}),
+  }
+
+  try {
+    const res = await fetch(url, { ...options, headers })
+    if (!res.ok) {
+      console.warn(`[Cloud] ${path} returned ${res.status}`)
+      return null
+    }
+    return res.json()
+  } catch (err) {
+    console.warn(`[Cloud] ${path} failed:`, err.message)
+    return null
+  }
+}
+
+// ─── Cloud: push schedule to KV ──────────────────────────────────────────────
+
+async function cloudPushSchedule(scheduleData) {
+  const config = await getCloudConfig()
+  if (!config) return
+  await cloudFetch('/extension/schedule', {
+    method: 'POST',
+    body: JSON.stringify(scheduleData),
+  })
+}
+
+// ─── Cloud: poll for pending orders ──────────────────────────────────────────
+
+async function cloudPollPendingOrders() {
+  const config = await getCloudConfig()
+  if (!config) return
+
+  const result = await cloudFetch('/extension/pending-order')
+  if (!result?.order || result.order.status !== 'pending') return
+
+  const order = result.order
+  // Convert to the format expected by quickOrder.js
+  const pendingOrder = {
+    orderId: order.orderId,
+    date: null,
+    approvedAt: new Date(order.queuedAt).toISOString(),
+    lines: order.lines,
+    cloudOrder: true, // Flag so we know to push result back
+  }
+
+  // Store as pending order and try to fill
+  chrome.storage.local.set({ pendingOrder }, () => {
+    updateBadge(pendingOrder)
+
+    // Try to send to an existing Lactalis tab
+    chrome.storage.local.get('lactalisTab', (r) => {
+      const quickOrderUrl = 'https://my.lactalis.com.au/customer/product/quick-add/'
+      if (r.lactalisTab?.tabId && r.lactalisTab.pageType === 'quick_order') {
+        chrome.tabs.sendMessage(
+          r.lactalisTab.tabId,
+          { type: 'FILL_ORDER', order: pendingOrder },
+          () => {
+            if (chrome.runtime.lastError) {
+              chrome.tabs.create({ url: quickOrderUrl })
+            }
+          }
+        )
+      } else {
+        chrome.tabs.create({ url: quickOrderUrl })
+      }
+    })
+  })
+}
+
+// ─── Cloud: push order result to KV ─────────────────────────────────────────
+
+async function cloudPushOrderResult(submission) {
+  const config = await getCloudConfig()
+  if (!config) return
+
+  // Check if this was a cloud order
+  const storage = await chrome.storage.local.get('pendingOrder')
+  if (!storage.pendingOrder?.cloudOrder) return
+
+  await cloudFetch('/extension/order-result', {
+    method: 'POST',
+    body: JSON.stringify({
+      orderId: storage.pendingOrder.orderId,
+      success: !!submission.lactalisRef,
+      lactalisRef: submission.lactalisRef || null,
+    }),
+  })
+}
+
+// ─── Cloud: push cookies to KV ───────────────────────────────────────────────
+
+async function cloudPushCookies() {
+  const config = await getCloudConfig()
+  if (!config) return
+
+  try {
+    const cookies = await chrome.cookies.getAll({ domain: 'mylactalis.com.au' })
+    if (cookies.length === 0) return
+    const cookieStr = cookies.map((c) => `${c.name}=${c.value}`).join('; ')
+    await cloudFetch('/extension/cookies', {
+      method: 'POST',
+      body: JSON.stringify({ cookies: cookieStr }),
+    })
+  } catch (err) {
+    console.warn('[Cloud] Cookie push failed:', err.message)
+  }
+}
+
+// ─── Alarms: safety net ──────────────────────────────────────────────────────
+
+// Clear any stale alarms from prior versions on service worker startup
+chrome.alarms.clearAll()
+
+chrome.alarms.onAlarm.addListener(() => {
+  // No-op safety net — no alarms are currently used
+})
 
 // ─── Message handler ──────────────────────────────────────────────────────────
 
@@ -47,12 +182,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           detectedAt: Date.now(),
         },
       })
+      // Cloud: push cookies when we detect a Lactalis page
+      cloudPushCookies()
       sendResponse({ ok: true })
       return true
 
     // Schedule data scraped from portal (Session 12)
     case 'SCHEDULE_UPDATE':
       chrome.storage.local.set({ schedule: msg.payload }, () => {
+        // Cloud: also push schedule to Worker KV
+        cloudPushSchedule(msg.payload)
         sendResponse({ ok: true })
       })
       return true
@@ -144,6 +283,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (!changes.lastSubmission?.newValue) return
 
   const submission = changes.lastSubmission.newValue
+
+  // Cloud: push order result to Worker KV
+  cloudPushOrderResult(submission)
 
   chrome.storage.local.get('statusUpdates', (result) => {
     const existing = Array.isArray(result.statusUpdates) ? result.statusUpdates : []

@@ -8,8 +8,8 @@
  *  - Global order multiplier (0.5–2.0, step 0.05)
  */
 
-import { useRef, useState, useEffect } from 'react'
-import { Clipboard, Download, Upload, X, RotateCcw, LogIn, LogOut, Wifi } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { Clipboard, Download, Upload, X, RotateCcw } from 'lucide-react'
 import {
   getSettings,
   saveSettings,
@@ -17,10 +17,6 @@ import {
   type ForecastSettings,
 } from '../lib/forecastEngine'
 import { exportAllData, downloadBackup, importAllData } from '../lib/dataExport'
-import {
-  getWorkerUrl, setWorkerUrl as saveWorkerUrl,
-  hasActiveSession, lactalisLogin, clearSession, checkWorkerHealth,
-} from '../lib/lactalisApi'
 
 interface Props {
   onClose: () => void
@@ -40,41 +36,8 @@ export default function SettingsSheet({ onClose }: Props) {
   const [storeName, setStoreName] = useState(() => localStorage.getItem('milk-manager-store-name') ?? '')
   const [lactalisEmail, setLactalisEmail] = useState(() => localStorage.getItem('milk-manager-lactalis-email') ?? '')
   const [storeInfoSaved, setStoreInfoSaved] = useState(false)
-
-  // Lactalis account state
-  const [workerUrl, setWorkerUrlState] = useState(() => getWorkerUrl())
-  const [lactalisUser, setLactalisUser] = useState(() => localStorage.getItem('milk-manager-lactalis-user') ?? '')
-  const [lactalisPass, setLactalisPass] = useState('')
-  const [lactalisConnected, setLactalisConnected] = useState(() => hasActiveSession())
-  const [lactalisLoggingIn, setLactalisLoggingIn] = useState(false)
-  const [lactalisError, setLactalisError] = useState<string | null>(null)
-  const [workerHealthy, setWorkerHealthy] = useState<boolean | null>(null)
-
-  // Check Worker health when URL changes
-  useEffect(() => {
-    if (!workerUrl) { setWorkerHealthy(null); return }
-    checkWorkerHealth().then(setWorkerHealthy)
-  }, [workerUrl])
-
-  async function handleLactalisLogin() {
-    setLactalisLoggingIn(true)
-    setLactalisError(null)
-    saveWorkerUrl(workerUrl)
-    localStorage.setItem('milk-manager-lactalis-user', lactalisUser)
-    const { success, error } = await lactalisLogin(lactalisUser, lactalisPass)
-    setLactalisLoggingIn(false)
-    if (success) {
-      setLactalisConnected(true)
-      setLactalisPass('')
-    } else {
-      setLactalisError(error ?? 'Login failed')
-    }
-  }
-
-  function handleLactalisLogout() {
-    clearSession()
-    setLactalisConnected(false)
-  }
+  const [workerUrl, setWorkerUrl] = useState(() => localStorage.getItem('milk-manager-worker-url') ?? '')
+  const [workerUrlSaved, setWorkerUrlSaved] = useState(false)
 
   async function handleBackup() {
     try {
@@ -300,90 +263,6 @@ export default function SettingsSheet({ onClose }: Props) {
             </p>
           </div>
 
-          {/* Lactalis Account */}
-          <div className="border-t border-gray-100 pt-4">
-            <div className="flex items-center justify-between mb-0.5">
-              <p className="text-sm font-medium text-gray-700">Lactalis Account</p>
-              {lactalisConnected && (
-                <span className="flex items-center gap-1 text-[11px] text-green-600 font-medium">
-                  <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
-                  Connected
-                </span>
-              )}
-            </div>
-            <p className="text-[11px] text-gray-400 mb-2">
-              Connect to Lactalis portal from your phone via a Cloudflare Worker proxy. No extension needed.
-            </p>
-
-            {/* Worker URL */}
-            <input
-              type="text"
-              inputMode="url"
-              placeholder="Worker URL (e.g. https://iga-milk-lactalis-proxy.your-account.workers.dev)"
-              value={workerUrl}
-              onChange={(e) => setWorkerUrlState(e.target.value.trim())}
-              onBlur={() => saveWorkerUrl(workerUrl)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono mb-1.5"
-            />
-            {workerUrl && workerHealthy !== null && (
-              <p className={`text-[11px] mb-2 ${workerHealthy ? 'text-green-600' : 'text-red-500'}`}>
-                <Wifi size={10} className="inline mr-1" />
-                {workerHealthy ? 'Worker reachable' : 'Worker unreachable — check URL'}
-              </p>
-            )}
-
-            {lactalisConnected ? (
-              <div className="flex gap-2">
-                <div className="flex-1 bg-green-50 border border-green-100 rounded-lg px-3 py-2">
-                  <p className="text-sm text-green-800 font-medium">Logged in as {lactalisUser || 'user'}</p>
-                  <p className="text-[11px] text-green-600">Session active — schedule & order submission enabled</p>
-                </div>
-                <button
-                  onClick={handleLactalisLogout}
-                  className="px-3 py-2 border border-red-200 text-red-600 text-sm rounded-lg flex items-center gap-1"
-                >
-                  <LogOut size={14} />
-                  Log Out
-                </button>
-              </div>
-            ) : (
-              <div className="flex flex-col gap-2">
-                <input
-                  type="text"
-                  placeholder="Lactalis username or email"
-                  value={lactalisUser}
-                  onChange={(e) => setLactalisUser(e.target.value)}
-                  autoComplete="username"
-                  autoCapitalize="off"
-                  autoCorrect="off"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                />
-                <input
-                  type="password"
-                  placeholder="Password"
-                  value={lactalisPass}
-                  onChange={(e) => setLactalisPass(e.target.value)}
-                  autoComplete="current-password"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                />
-                {lactalisError && (
-                  <p className="text-[11px] text-red-500">{lactalisError}</p>
-                )}
-                <button
-                  onClick={handleLactalisLogin}
-                  disabled={lactalisLoggingIn || !workerUrl || !lactalisUser || !lactalisPass}
-                  className="w-full py-2 bg-blue-600 text-white text-sm font-medium rounded-lg disabled:opacity-40 flex items-center justify-center gap-2"
-                >
-                  <LogIn size={14} />
-                  {lactalisLoggingIn ? 'Logging in…' : 'Log In to Lactalis'}
-                </button>
-                <p className="text-[10px] text-gray-400">
-                  Credentials are sent securely to your Worker over HTTPS — never stored.
-                </p>
-              </div>
-            )}
-          </div>
-
           {/* Gemini API Key */}
           <div className="border-t border-gray-100 pt-4">
             <p className="text-sm font-medium text-gray-700 mb-0.5">Gemini API Key</p>
@@ -461,6 +340,31 @@ export default function SettingsSheet({ onClose }: Props) {
               className="w-full py-2 bg-blue-600 text-white text-sm font-medium rounded-lg"
             >
               {storeInfoSaved ? 'Saved ✓' : 'Save Store Info'}
+            </button>
+          </div>
+
+          {/* Worker URL (Cloud Relay) */}
+          <div className="border-t border-gray-100 pt-4">
+            <p className="text-sm font-medium text-gray-700 mb-0.5">Cloud Relay</p>
+            <p className="text-[11px] text-gray-400 mb-2">
+              Worker URL for cloud schedule sync and order relay via the desktop extension.
+            </p>
+            <input
+              type="text"
+              placeholder="https://your-worker.workers.dev"
+              value={workerUrl}
+              onChange={(e) => setWorkerUrl(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono mb-2"
+            />
+            <button
+              onClick={() => {
+                localStorage.setItem('milk-manager-worker-url', workerUrl.trim())
+                setWorkerUrlSaved(true)
+                setTimeout(() => setWorkerUrlSaved(false), 2000)
+              }}
+              className="w-full py-2 bg-blue-600 text-white text-sm font-medium rounded-lg"
+            >
+              {workerUrlSaved ? 'Saved' : 'Save Worker URL'}
             </button>
           </div>
 
