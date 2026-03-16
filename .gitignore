@@ -14,6 +14,9 @@ dist/
 Thumbs.db
 *.local
 
+# Claude Code internal files
+.claude/
+
 # Stale shadow directory — prevents the project/project/ duplication
 # that occurs when git commits are accidentally made from the parent
 # IGA Milk Order/ directory instead of from project/

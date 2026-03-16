@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Icon Preview</title>
+  <style>
+    body { background: #f1f5f9; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: Arial, sans-serif; gap: 32px; }
+    .row { display: flex; gap: 40px; align-items: flex-end; flex-wrap: wrap; justify-content: center; }
+    .box { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+    label { font-size: 13px; color: #64748b; }
+    button { padding: 12px 28px; background: #2563eb; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; }
+    button:hover { background: #1d4ed8; }
+    .phone-frame { background: #1e293b; border-radius: 40px; padding: 40px 24px 20px; display: flex; flex-direction: column; align-items: center; gap: 6px; box-shadow: 0 8px 32px rgba(0,0,0,0.3); }
+    .phone-label { color: white; font-size: 11px; }
+  </style>
+</head>
+<body>
+  <h2 style="color:#1e293b;margin:0">IGA Milk Manager — Icon Preview</h2>
+
+  <div class="row">
+    <div class="box">
+      <label>512 × 512</label>
+      <canvas id="c512" width="512" height="512" style="width:200px;height:200px;border-radius:38px;box-shadow:0 4px 24px rgba(0,0,0,0.2)"></canvas>
+    </div>
+    <div class="box">
+      <label>192 × 192</label>
+      <canvas id="c192" width="192" height="192" style="width:96px;height:96px;border-radius:14px;box-shadow:0 2px 12px rgba(0,0,0,0.2)"></canvas>
+    </div>
+    <div class="box">
+      <label>iPhone home screen</label>
+      <div class="phone-frame">
+        <canvas id="cphone" width="512" height="512" style="width:76px;height:76px;border-radius:18px;box-shadow:0 2px 8px rgba(0,0,0,0.3)"></canvas>
+        <span class="phone-label">Milk Order</span>
+      </div>
+    </div>
+  </div>
+
+  <div style="display:flex;gap:12px;margin-top:8px">
+    <button onclick="download512()">Download 512×512 PNG</button>
+    <button onclick="download192()" style="background:#64748b">Download 192×192 PNG</button>
+  </div>
+
+<script>
+function drawIcon(canvas) {
+  const s = canvas.width;
+  const ctx = canvas.getContext('2d');
+
+  // ── Rounded-square background with blue gradient ──
+  const r = s * 0.18;
+  const grad = ctx.createLinearGradient(0, 0, 0, s);
+  grad.addColorStop(0, '#3b82f6');
+  grad.addColorStop(1, '#1d4ed8');
+  roundRect(ctx, 0, 0, s, s, r);
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // ── Draw milk jug (inspired by flaticon 684614 shape) ──
+  // Jug sits slightly left of centre to leave room for handle on right
+  const cx = s * 0.46;
+  const cy = s * 0.54;
+
+  // --- Jug body (large rounded oval) ---
+  const bw = s * 0.44;   // body half-width
+  const bh = s * 0.36;   // body half-height
+  ctx.fillStyle = 'white';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, bw, bh, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // --- Jug neck ---
+  const neckW   = s * 0.13;
+  const neckBot = cy - bh + s * 0.04;  // where neck meets body top
+  const neckTop = s * 0.20;
+  ctx.fillStyle = 'white';
+  ctx.beginPath();
+  ctx.moveTo(cx - neckW / 2, neckBot);
+  ctx.lineTo(cx - neckW / 2, neckTop + s * 0.025);
+  ctx.quadraticCurveTo(cx - neckW / 2, neckTop, cx - neckW / 2 + s * 0.015, neckTop);
+  ctx.lineTo(cx + neckW / 2 - s * 0.015, neckTop);
+  ctx.quadraticCurveTo(cx + neckW / 2, neckTop, cx + neckW / 2, neckTop + s * 0.025);
+  ctx.lineTo(cx + neckW / 2, neckBot);
+  ctx.closePath();
+  ctx.fill();
+
+  // --- Spout / pouring lip ---
+  const spoutX = cx - neckW * 0.1;
+  const spoutY = neckTop;
+  ctx.fillStyle = 'white';
+  ctx.beginPath();
+  ctx.moveTo(spoutX - s * 0.045, spoutY);
+  ctx.quadraticCurveTo(spoutX - s * 0.07, spoutY - s * 0.06, spoutX - s * 0.035, spoutY - s * 0.075);
+  ctx.lineTo(spoutX + s * 0.055, spoutY - s * 0.075);
+  ctx.quadraticCurveTo(spoutX + s * 0.075, spoutY - s * 0.06, spoutX + s * 0.045, spoutY);
+  ctx.closePath();
+  ctx.fill();
+
+  // --- Handle on right side ---
+  const hx  = cx + bw * 0.78;          // handle outer x
+  const hy1 = cy - bh * 0.45;          // handle top attachment
+  const hy2 = cy + bh * 0.45;          // handle bottom attachment
+  const hw  = s * 0.085;               // how far handle extends right
+  const ht  = s * 0.05;                // tube thickness
+  ctx.fillStyle = 'white';
+  ctx.beginPath();
+  // Outer arc of handle
+  ctx.moveTo(hx, hy1);
+  ctx.bezierCurveTo(hx + hw * 2.2, hy1, hx + hw * 2.2, hy2, hx, hy2);
+  // Inner arc (cut-out)
+  ctx.lineTo(hx - ht * 0.2, hy2 - ht);
+  ctx.bezierCurveTo(hx + hw * 1.6, hy2 - ht, hx + hw * 1.6, hy1 + ht, hx, hy1 + ht);
+  ctx.closePath();
+  ctx.fill();
+
+  // --- Milk fill level inside jug (light blue wave) ---
+  const fillY = cy + bh * 0.12;        // fill waterline
+  ctx.save();
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, bw - s * 0.015, bh - s * 0.015, 0, 0, Math.PI * 2);
+  ctx.clip();
+
+  ctx.fillStyle = '#bfdbfe';
+  ctx.globalAlpha = 0.5;
+  ctx.beginPath();
+  ctx.moveTo(cx - bw, fillY);
+  ctx.bezierCurveTo(
+    cx - bw * 0.5, fillY - s * 0.022,
+    cx + bw * 0.5, fillY + s * 0.022,
+    cx + bw, fillY
+  );
+  ctx.lineTo(cx + bw, cy + bh);
+  ctx.lineTo(cx - bw, cy + bh);
+  ctx.closePath();
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  // --- Highlight sheen on jug ---
+  const sheen = ctx.createRadialGradient(cx - bw * 0.3, cy - bh * 0.5, 0, cx - bw * 0.3, cy - bh * 0.5, bw * 0.55);
+  sheen.addColorStop(0, 'rgba(255,255,255,0.28)');
+  sheen.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.save();
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, bw, bh, 0, 0, Math.PI * 2);
+  ctx.clip();
+  ctx.fillStyle = sheen;
+  ctx.fillRect(cx - bw, cy - bh, bw * 2, bh * 2);
+  ctx.restore();
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+['c512','c192','cphone'].forEach(id => drawIcon(document.getElementById(id)));
+
+function download512() {
+  const c = document.getElementById('c512');
+  const a = document.createElement('a');
+  a.download = 'manifest-icon-512.png';
+  a.href = c.toDataURL('image/png');
+  a.click();
+}
+function download192() {
+  const c = document.getElementById('c192');
+  const a = document.createElement('a');
+  a.download = 'manifest-icon-192.png';
+  a.href = c.toDataURL('image/png');
+  a.click();
+}
+</script>
+</body>
+</html>
