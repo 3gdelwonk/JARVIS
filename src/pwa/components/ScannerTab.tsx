@@ -552,6 +552,7 @@ function WasteScanner() {
   const [bcDate, setBcDate] = useState(todayStr)
   const [bcSaving, setBcSaving] = useState(false)
   const [bcError, setBcError] = useState('')
+  const [bcSessionLog, setBcSessionLog] = useState<Array<{ name: string; qty: number; reason: string }>>([])
 
   // ── Photo mode state ──
   const [image, setImage] = useState<File | null>(null)
@@ -639,6 +640,7 @@ function WasteScanner() {
         }
       }
 
+      setBcSessionLog((prev) => [...prev, { name: bcProduct?.name ?? bcProductName, qty: bcQty, reason: bcReason }])
       setBcState('logged')
       setTimeout(() => {
         setBcState('scanning')
@@ -937,6 +939,35 @@ function WasteScanner() {
             </div>
           </div>
         )}
+
+        {/* Barcode session summary */}
+        {bcSessionLog.length > 0 && (
+          <div className="mt-1">
+            <div className="flex items-center justify-between mb-1.5 px-0.5">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                Logged this session ({bcSessionLog.length})
+              </p>
+              <button onClick={() => setBcSessionLog([])} className="text-[11px] text-gray-400 underline">
+                Clear
+              </button>
+            </div>
+            <div className="bg-white border border-gray-100 rounded-xl overflow-hidden max-h-48 overflow-y-auto">
+              {[...bcSessionLog].reverse().map((item, i) => (
+                <div key={i} className="flex items-center justify-between px-3 py-2 border-b border-gray-50 last:border-0">
+                  <p className="text-sm text-gray-800 truncate flex-1">{item.name}</p>
+                  <div className="flex items-center gap-2 shrink-0 ml-2">
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                      item.reason === 'expired' ? 'bg-red-100 text-red-700'
+                      : item.reason === 'damaged' ? 'bg-amber-100 text-amber-700'
+                      : 'bg-gray-100 text-gray-600'
+                    }`}>{item.reason}</span>
+                    <span className="text-sm font-semibold text-gray-700">×{item.qty}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     )
   }
@@ -1143,6 +1174,7 @@ function AddToOrderScanner() {
   const [qty, setQty] = useState(1)
   const [addError, setAddError] = useState('')
   const [manualInput, setManualInput] = useState('')
+  const [sessionItems, setSessionItems] = useState<Array<{ name: string; qty: number }>>([])
 
   const { videoRef, cameraError, isMirrored, startCamera, stopCamera, resumeScanning, shouldScanRef } =
     useBarcodeCamera(handleBarcode)
@@ -1217,6 +1249,7 @@ function AddToOrderScanner() {
         })
       }
 
+      setSessionItems((prev) => [...prev, { name: product!.name, qty }])
       setScanState('added')
       setTimeout(() => scanAgain(), 1500)
     } catch (e) {
@@ -1355,6 +1388,28 @@ function AddToOrderScanner() {
           Look Up
         </button>
       </div>}
+
+      {/* Session summary */}
+      {sessionItems.length > 0 && (
+        <div className="mt-1">
+          <div className="flex items-center justify-between mb-1.5 px-0.5">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+              Added this session ({sessionItems.length})
+            </p>
+            <button onClick={() => setSessionItems([])} className="text-[11px] text-gray-400 underline">
+              Clear
+            </button>
+          </div>
+          <div className="bg-white border border-gray-100 rounded-xl overflow-hidden max-h-48 overflow-y-auto">
+            {[...sessionItems].reverse().map((item, i) => (
+              <div key={i} className="flex items-center justify-between px-3 py-2 border-b border-gray-50 last:border-0">
+                <p className="text-sm text-gray-800 truncate flex-1">{item.name}</p>
+                <span className="text-sm font-semibold text-gray-700 shrink-0 ml-2">×{item.qty}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
