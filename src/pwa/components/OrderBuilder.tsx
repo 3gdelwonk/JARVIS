@@ -201,7 +201,8 @@ const ForecastRow = memo(function ForecastRow({ forecast: f, qty, onChange, imag
           </div>
         </div>
 
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="flex flex-col items-center gap-0 shrink-0">
+          <div className="flex items-center gap-1">
           <button onPointerDown={(e) => e.preventDefault()}
             onClick={() => onChange(f.productId, Math.max(0, qty - 1))}
             className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-100 active:bg-gray-200 text-gray-600"
@@ -221,16 +222,20 @@ const ForecastRow = memo(function ForecastRow({ forecast: f, qty, onChange, imag
                 qty === 0 ? 'text-gray-300' : qty > f.suggestedQty * 1.5 ? 'text-amber-600' : 'text-gray-900'
               }`}
               aria-label="Edit quantity">
-              {qty}
+              {qty === 0 ? '—' : qty}
             </button>
           )}
 
           <button onPointerDown={(e) => e.preventDefault()}
-            onClick={() => onChange(f.productId, qty + 1)}
+            onClick={() => onChange(f.productId, qty === 0 ? f.suggestedQty : qty + 1)}
             className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-100 active:bg-gray-200 text-gray-600"
             aria-label="Increase">
             <Plus size={14} />
           </button>
+          </div>
+          {qty === 0 && f.suggestedQty > 0 && (
+            <p className="text-[10px] text-blue-400 text-center leading-none mt-0.5">+{f.suggestedQty}</p>
+          )}
         </div>
       </div>
     </div>
@@ -550,7 +555,7 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
       setQtys((prev) => {
         const next = new Map(prev)
         for (const f of results) {
-          if (!next.has(f.productId)) next.set(f.productId, f.suggestedQty)
+          if (!next.has(f.productId)) next.set(f.productId, 0)
         }
         return next
       })
@@ -664,7 +669,7 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
         <div className="flex items-center gap-1.5">
           <button onClick={resetToSuggested}
             className="flex items-center gap-1 text-xs text-gray-500 px-2 py-1 rounded border border-gray-200">
-            <RotateCcw size={12} />Reset
+            <RotateCcw size={12} />Fill Suggested
           </button>
           <button onClick={load}
             className="flex items-center gap-1 text-xs text-gray-500 px-2 py-1 rounded border border-gray-200">
