@@ -175,8 +175,7 @@ export async function fetchCloudSchedule(): Promise<number> {
 
     // The cloud cache returns the same format as the extension schedule
     const slots: ScrapedSlot[] = data.upcomingDeliveries
-      ?? (data.nextDelivery ? [data.nextDelivery] : [])
-      ?? (data.slots ?? []).map((s: { deliveryDate: string }) => ({ deliveryDate: s.deliveryDate }))
+      ?? (data.nextDelivery ? [data.nextDelivery] : (data.slots ?? []).map((s: { deliveryDate: string }) => ({ deliveryDate: s.deliveryDate })))
 
     if (slots.length === 0) return 0
     return upsertSlots(slots)
