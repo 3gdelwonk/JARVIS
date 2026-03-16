@@ -26,9 +26,12 @@ import {
   Download,
   ExternalLink,
   ImageOff,
+  Minus,
   Package,
+  Plus,
   RefreshCw,
   ShoppingCart,
+  Trash2,
   TrendingUp,
 } from 'lucide-react'
 import { db } from '../lib/db'
@@ -284,17 +287,9 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
     d.setDate(d.getDate() - 6)
     return d.toISOString().split('T')[0]
   })()
-  const weekWaste = (allWasteEntries ?? []).filter((w) => w.wastedDate >= weekStartStr)
-  // Group by product name → total qty
-  const wasteByProduct = new Map<string, { qty: number; reason: string }>()
-  for (const w of weekWaste) {
-    const prev = wasteByProduct.get(w.productName)
-    wasteByProduct.set(w.productName, {
-      qty: (prev?.qty ?? 0) + w.quantity,
-      reason: w.reason,
-    })
-  }
-  const wasteSorted = [...wasteByProduct.entries()].sort((a, b) => b[1].qty - a[1].qty)
+  const weekWaste = (allWasteEntries ?? [])
+    .filter((w) => w.wastedDate >= weekStartStr)
+    .sort((a, b) => b.wastedDate.localeCompare(a.wastedDate))
   const totalWasteQty = weekWaste.reduce((s, w) => s + w.quantity, 0)
 
   return (
@@ -490,22 +485,40 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
         </div>
 
         <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-          {wasteSorted.length === 0 ? (
+          {weekWaste.length === 0 ? (
             <div className="py-5 text-center">
               <p className="text-xs text-gray-400">No waste logged this week</p>
             </div>
           ) : (
-            wasteSorted.map(([name, { qty, reason }]) => (
-              <div key={name} className="flex items-center justify-between px-3 py-2 border-b border-gray-100 last:border-0">
-                <p className="text-sm text-gray-800 truncate flex-1">{name}</p>
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-                    reason === 'expired' ? 'bg-red-100 text-red-700'
-                    : reason === 'damaged' ? 'bg-amber-100 text-amber-700'
-                    : 'bg-gray-100 text-gray-600'
-                  }`}>{reason}</span>
-                  <span className="text-sm font-semibold text-gray-700">×{qty}</span>
+            weekWaste.map((entry) => (
+              <div key={entry.id} className="flex items-center gap-2 px-3 py-2 border-b border-gray-100 last:border-0">
+                <p className="text-sm text-gray-800 truncate flex-1">{entry.productName}</p>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 ${
+                  entry.reason === 'expired' ? 'bg-red-100 text-red-700'
+                  : entry.reason === 'damaged' ? 'bg-amber-100 text-amber-700'
+                  : 'bg-gray-100 text-gray-600'
+                }`}>{entry.reason}</span>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    onClick={() => db.wasteLog.update(entry.id!, { quantity: Math.max(1, entry.quantity - 1) })}
+                    className="w-6 h-6 rounded-full bg-gray-100 flex items-center justify-center text-gray-600"
+                  >
+                    <Minus size={10} />
+                  </button>
+                  <span className="w-6 text-center text-sm font-semibold text-gray-700">{entry.quantity}</span>
+                  <button
+                    onClick={() => db.wasteLog.update(entry.id!, { quantity: entry.quantity + 1 })}
+                    className="w-6 h-6 rounded-full bg-gray-100 flex items-center justify-center text-gray-600"
+                  >
+                    <Plus size={10} />
+                  </button>
                 </div>
+                <button
+                  onClick={() => db.wasteLog.delete(entry.id!)}
+                  className="p-1 text-gray-300 hover:text-red-400 shrink-0"
+                >
+                  <Trash2 size={13} />
+                </button>
               </div>
             ))
           )}

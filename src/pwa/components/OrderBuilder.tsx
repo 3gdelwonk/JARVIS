@@ -449,11 +449,25 @@ function ExportView({ orderId, onBack, onReceive }: ExportViewProps) {
             </button>
           </div>
 
-          {/* Submit to Lactalis */}
+          {/* Open portal link — always available */}
+          <p className="text-[11px] text-gray-400">
+            Copy the paste string above, then open the Lactalis portal to submit.
+          </p>
+          <a
+            href="https://my.lactalis.com.au"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium border border-blue-300 text-blue-700 bg-blue-50"
+          >
+            <ExternalLink size={15} />
+            Open Lactalis Portal →
+          </a>
+
+          {/* Auto-submit via extension (desktop only) */}
           <button
             onClick={handleSubmitToLactalis}
             disabled={order.status !== 'approved'}
-            className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition-colors ${
+            className={`w-full flex flex-col items-center justify-center py-2.5 rounded-xl text-sm font-medium transition-colors ${
               submitted
                 ? 'bg-green-100 text-green-700'
                 : order.status !== 'approved'
@@ -461,8 +475,11 @@ function ExportView({ orderId, onBack, onReceive }: ExportViewProps) {
                   : 'bg-blue-600 text-white'
             }`}
           >
-            <ExternalLink size={15} />
-            {submitted ? 'Opening Lactalis Portal…' : 'Submit to Lactalis'}
+            <span className="flex items-center gap-2">
+              <ExternalLink size={15} />
+              {submitted ? 'Sent to Extension…' : 'Auto-Submit via Extension'}
+            </span>
+            <span className="text-[10px] opacity-60 mt-0.5">Desktop + Chrome extension required</span>
           </button>
         </div>
 
