@@ -317,10 +317,11 @@ export default function SettingsSheet({ onClose }: Props) {
 
             {/* Worker URL */}
             <input
-              type="url"
+              type="text"
+              inputMode="url"
               placeholder="Worker URL (e.g. https://iga-milk-lactalis-proxy.your-account.workers.dev)"
               value={workerUrl}
-              onChange={(e) => setWorkerUrlState(e.target.value)}
+              onChange={(e) => setWorkerUrlState(e.target.value.trim())}
               onBlur={() => saveWorkerUrl(workerUrl)}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono mb-1.5"
             />
@@ -349,10 +350,12 @@ export default function SettingsSheet({ onClose }: Props) {
               <div className="flex flex-col gap-2">
                 <input
                   type="text"
-                  placeholder="Lactalis username"
+                  placeholder="Lactalis username or email"
                   value={lactalisUser}
                   onChange={(e) => setLactalisUser(e.target.value)}
                   autoComplete="username"
+                  autoCapitalize="off"
+                  autoCorrect="off"
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
                 <input
