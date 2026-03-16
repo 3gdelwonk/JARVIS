@@ -12,6 +12,12 @@ import { db } from './db'
 export interface BackupPayload {
   version: 1
   exportedAt: string
+  settings?: {
+    claudeKey?: string
+    geminiKey?: string
+    storeName?: string
+    lactalisEmail?: string
+  }
   tables: {
     products: unknown[]
     stockSnapshots: unknown[]
@@ -56,6 +62,12 @@ export async function exportAllData(): Promise<string> {
   const payload: BackupPayload = {
     version: 1,
     exportedAt: new Date().toISOString(),
+    settings: {
+      claudeKey:     localStorage.getItem('milk-manager-claude-key')     ?? undefined,
+      geminiKey:     localStorage.getItem('milk-manager-gemini-key')     ?? undefined,
+      storeName:     localStorage.getItem('milk-manager-store-name')     ?? undefined,
+      lactalisEmail: localStorage.getItem('milk-manager-lactalis-email') ?? undefined,
+    },
     tables: {
       products,
       stockSnapshots,
@@ -139,4 +151,13 @@ export async function importAllData(json: string): Promise<void> {
       ])
     },
   )
+
+  // Restore localStorage settings if present in backup
+  const s = payload.settings
+  if (s) {
+    if (s.claudeKey)     localStorage.setItem('milk-manager-claude-key',     s.claudeKey)
+    if (s.geminiKey)     localStorage.setItem('milk-manager-gemini-key',     s.geminiKey)
+    if (s.storeName)     localStorage.setItem('milk-manager-store-name',     s.storeName)
+    if (s.lactalisEmail) localStorage.setItem('milk-manager-lactalis-email', s.lactalisEmail)
+  }
 }

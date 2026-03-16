@@ -259,8 +259,20 @@ async function fetchImagesFromOpenFoodFacts(products: Product[]) {
         (json as { product?: { image_url?: string } })?.product?.image_url ||
         (json as { product?: { image_front_small_url?: string } })?.product?.image_front_small_url
       if (imageUrl) {
-        await db.products.update(p.id!, { imageUrl })
-        matched++
+        try {
+          const imgRes = await fetch(imageUrl, { signal: AbortSignal.timeout(8000) })
+          const blob = await imgRes.blob()
+          const base64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader()
+            reader.onload = () => resolve(reader.result as string)
+            reader.onerror = reject
+            reader.readAsDataURL(blob)
+          })
+          await db.products.update(p.id!, { imageUrl: base64 })
+          matched++
+        } catch {
+          skipped++
+        }
       }
     }
     // Rate-limit delay between requests
