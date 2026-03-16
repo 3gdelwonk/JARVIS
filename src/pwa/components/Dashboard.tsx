@@ -33,6 +33,7 @@ import {
   ShoppingCart,
   Trash2,
   TrendingUp,
+  X,
 } from 'lucide-react'
 import { db } from '../lib/db'
 import { generateForecasts, getSettings, type Forecast } from '../lib/forecastEngine'
@@ -154,6 +155,7 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
   const [historyError, setHistoryError] = useState<string | null>(null)
   const [extStatus, setExtStatus] = useState<{ connected: boolean; lactalisLoggedIn: boolean } | null>(null)
   const [refreshingSchedule, setRefreshingSchedule] = useState(false)
+  const [showWasteEditModal, setShowWasteEditModal] = useState(false)
   // Live queries
   const recentOrders = useLiveQuery(
     () => db.orders.orderBy('createdAt').reverse().limit(5).toArray(),
@@ -290,6 +292,19 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
   const weekWaste = (allWasteEntries ?? [])
     .filter((w) => w.wastedDate >= weekStartStr)
     .sort((a, b) => b.wastedDate.localeCompare(a.wastedDate))
+  // Group by productId (or productName fallback) for the summary card rows
+  const wasteGroupMap = new Map<string, { productName: string; productId: number; qty: number; reason: string }>()
+  for (const w of weekWaste) {
+    const key = w.productId ? `id:${w.productId}` : `name:${w.productName}`
+    const prev = wasteGroupMap.get(key)
+    wasteGroupMap.set(key, {
+      productName: w.productName,
+      productId: w.productId,
+      qty: (prev?.qty ?? 0) + w.quantity,
+      reason: w.reason,
+    })
+  }
+  const wasteSorted = [...wasteGroupMap.values()].sort((a, b) => b.qty - a.qty)
   const totalWasteQty = weekWaste.reduce((s, w) => s + w.quantity, 0)
 
   return (
@@ -484,45 +499,114 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
           </button>
         </div>
 
-        <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-          {weekWaste.length === 0 ? (
+        {/* Waste edit modal */}
+        {showWasteEditModal && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-end justify-center">
+            <div className="bg-white rounded-t-2xl w-full max-w-[480px] flex flex-col max-h-[80vh] shadow-xl">
+              <div className="flex items-center justify-between px-5 pt-5 pb-3 shrink-0">
+                <p className="text-base font-semibold text-gray-900">Edit This Week's Waste</p>
+                <button onClick={() => setShowWasteEditModal(false)} className="p-1 text-gray-400 hover:text-gray-600">
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="border-t border-gray-100 mx-4 shrink-0" />
+              <div className="overflow-y-auto flex-1 px-4 py-2 flex flex-col gap-2">
+                {weekWaste.length === 0 && (
+                  <p className="text-sm text-gray-400 text-center py-6">No waste logged this week</p>
+                )}
+                {weekWaste.map((entry) => (
+                  <div key={entry.id} className="flex items-center gap-3 bg-gray-50 rounded-xl px-3 py-2.5">
+                    <div className="relative w-9 h-9 rounded-lg bg-gray-100 overflow-hidden flex items-center justify-center shrink-0">
+                      <ImageOff size={12} className="text-gray-300" />
+                      {entry.productId && productImageMap?.get(entry.productId) && (
+                        <img
+                          src={productImageMap.get(entry.productId)}
+                          alt=""
+                          className="absolute inset-0 w-full h-full object-cover"
+                          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+                        />
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-gray-800 truncate">{entry.productName}</p>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                        entry.reason === 'expired' ? 'bg-red-100 text-red-700'
+                        : entry.reason === 'damaged' ? 'bg-amber-100 text-amber-700'
+                        : 'bg-gray-100 text-gray-600'
+                      }`}>{entry.reason}</span>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={() => db.wasteLog.update(entry.id!, { quantity: Math.max(1, entry.quantity - 1) })}
+                        className="w-7 h-7 rounded-full bg-white border border-gray-200 flex items-center justify-center text-gray-600"
+                      >
+                        <Minus size={12} />
+                      </button>
+                      <span className="w-7 text-center text-sm font-semibold text-gray-900">{entry.quantity}</span>
+                      <button
+                        onClick={() => db.wasteLog.update(entry.id!, { quantity: entry.quantity + 1 })}
+                        className="w-7 h-7 rounded-full bg-white border border-gray-200 flex items-center justify-center text-gray-600"
+                      >
+                        <Plus size={12} />
+                      </button>
+                    </div>
+                    <button
+                      onClick={() => db.wasteLog.delete(entry.id!)}
+                      className="p-1 text-gray-300 hover:text-red-400 shrink-0"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div className="px-4 pb-5 pt-3 shrink-0 border-t border-gray-100">
+                <button
+                  onClick={() => setShowWasteEditModal(false)}
+                  className="w-full py-3 bg-gray-900 text-white text-sm font-semibold rounded-xl"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Grouped summary card — tap to edit */}
+        <button
+          onClick={() => weekWaste.length > 0 && setShowWasteEditModal(true)}
+          className="w-full text-left bg-white rounded-xl border border-gray-100 overflow-hidden"
+        >
+          {wasteSorted.length === 0 ? (
             <div className="py-5 text-center">
               <p className="text-xs text-gray-400">No waste logged this week</p>
             </div>
           ) : (
-            weekWaste.map((entry) => (
-              <div key={entry.id} className="flex items-center gap-2 px-3 py-2 border-b border-gray-100 last:border-0">
-                <p className="text-sm text-gray-800 truncate flex-1">{entry.productName}</p>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 ${
-                  entry.reason === 'expired' ? 'bg-red-100 text-red-700'
-                  : entry.reason === 'damaged' ? 'bg-amber-100 text-amber-700'
-                  : 'bg-gray-100 text-gray-600'
-                }`}>{entry.reason}</span>
-                <div className="flex items-center gap-1 shrink-0">
-                  <button
-                    onClick={() => db.wasteLog.update(entry.id!, { quantity: Math.max(1, entry.quantity - 1) })}
-                    className="w-6 h-6 rounded-full bg-gray-100 flex items-center justify-center text-gray-600"
-                  >
-                    <Minus size={10} />
-                  </button>
-                  <span className="w-6 text-center text-sm font-semibold text-gray-700">{entry.quantity}</span>
-                  <button
-                    onClick={() => db.wasteLog.update(entry.id!, { quantity: entry.quantity + 1 })}
-                    className="w-6 h-6 rounded-full bg-gray-100 flex items-center justify-center text-gray-600"
-                  >
-                    <Plus size={10} />
-                  </button>
+            wasteSorted.map((group) => (
+              <div key={`${group.productId}-${group.productName}`} className="flex items-center gap-2.5 px-3 py-2 border-b border-gray-100 last:border-0">
+                <div className="relative w-8 h-8 rounded-md bg-gray-100 overflow-hidden flex items-center justify-center shrink-0">
+                  <ImageOff size={11} className="text-gray-300" />
+                  {group.productId > 0 && productImageMap?.get(group.productId) && (
+                    <img
+                      src={productImageMap.get(group.productId)}
+                      alt=""
+                      className="absolute inset-0 w-full h-full object-cover"
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+                    />
+                  )}
                 </div>
-                <button
-                  onClick={() => db.wasteLog.delete(entry.id!)}
-                  className="p-1 text-gray-300 hover:text-red-400 shrink-0"
-                >
-                  <Trash2 size={13} />
-                </button>
+                <p className="text-sm text-gray-800 truncate flex-1">{group.productName}</p>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                    group.reason === 'expired' ? 'bg-red-100 text-red-700'
+                    : group.reason === 'damaged' ? 'bg-amber-100 text-amber-700'
+                    : 'bg-gray-100 text-gray-600'
+                  }`}>{group.reason}</span>
+                  <span className="text-sm font-semibold text-gray-700">×{group.qty}</span>
+                </div>
               </div>
             ))
           )}
-        </div>
+        </button>
       </div>
 
       {/* ── Recent orders ──────────────────────────────────────────────────── */}
