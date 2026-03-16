@@ -24,7 +24,6 @@ import {
   ArrowRight,
   Clock,
   Download,
-  ExternalLink,
   ImageOff,
   Minus,
   Package,
