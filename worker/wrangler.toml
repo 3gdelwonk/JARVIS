@@ -6,10 +6,6 @@ compatibility_date = "2024-12-01"
 LACTALIS_BASE = "https://my.lactalis.com.au"
 SLOT_CONFIG_ID = "869"
 
-# After creating the KV namespace, uncomment and fill in:
-# [[kv_namespaces]]
-# binding = "SESSIONS"
-# id = "<your-kv-namespace-id>"
-#
-# To create:  wrangler kv:namespace create SESSIONS
-# Then paste the id above.
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "2e9fb21f3e6a409e96922f7f02cfdfcd"
