@@ -144,7 +144,10 @@ export async function checkWorkerHealth(): Promise<boolean> {
   try {
     const base = getWorkerUrl()
     if (!base) return false
-    const res = await fetch(`${base}/health`, { signal: AbortSignal.timeout(5000) })
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 5000)
+    const res = await fetch(`${base}/health`, { signal: controller.signal })
+    clearTimeout(timer)
     return res.ok
   } catch {
     return false
