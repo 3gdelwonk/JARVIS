@@ -1,0 +1,15 @@
+name = "iga-milk-lactalis-proxy"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+
+[vars]
+LACTALIS_BASE = "https://my.lactalis.com.au"
+SLOT_CONFIG_ID = "869"
+
+# After creating the KV namespace, uncomment and fill in:
+# [[kv_namespaces]]
+# binding = "SESSIONS"
+# id = "<your-kv-namespace-id>"
+#
+# To create:  wrangler kv:namespace create SESSIONS
+# Then paste the id above.
