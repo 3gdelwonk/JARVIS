@@ -524,8 +524,11 @@ function useBarcodeCamera(onDetected: (barcode: string) => void) {
         if (rafRef.current) cancelAnimationFrame(rafRef.current)
         if (videoRef.current?.paused) videoRef.current.play().catch(() => {})
         runDetection()
+      } else {
+        zxingControlsRef.current?.stop()
+        zxingControlsRef.current = null
+        runZxingDetection()
       }
-      // ZXing path: loop is still running — re-enabling shouldScanRef above is enough
     }
   }
 
@@ -535,24 +538,14 @@ function useBarcodeCamera(onDetected: (barcode: string) => void) {
 // ─── Waste Scanner (Mode B) ───────────────────────────────────────────────────
 
 type WasteMode = 'barcode' | 'photo'
-type BarcodeScanState = 'scanning' | 'found' | 'notfound' | 'logged'
 
 function WasteScanner() {
   // ── Shared ──
   const [wasteMode, setWasteMode] = useState<WasteMode>('barcode')
 
   // ── Barcode mode state ──
-  const [bcState, setBcState] = useState<BarcodeScanState>('scanning')
-  const [bcBarcode, setBcBarcode] = useState('')
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [bcProduct, setBcProduct] = useState<any | null>(null)
-  const [bcProductName, setBcProductName] = useState('')
-  const [bcQty, setBcQty] = useState(1)
-  const [bcReason, setBcReason] = useState<StagedWasteEntry['reason']>('expired')
-  const [bcDate, setBcDate] = useState(todayStr)
-  const [bcSaving, setBcSaving] = useState(false)
-  const [bcError, setBcError] = useState('')
-  const [bcSessionLog, setBcSessionLog] = useState<Array<{ name: string; qty: number; reason: string }>>([])
+  const [bcDetected, setBcDetected] = useState<{ product: any | null; barcode: string; name: string; qty: number; reason: StagedWasteEntry['reason']; date: string } | null>(null)
 
   // ── Photo mode state ──
   const [image, setImage] = useState<File | null>(null)
@@ -575,7 +568,8 @@ function WasteScanner() {
   useEffect(() => {
     if (wasteMode !== 'barcode') return
     shouldScanRef.current = true
-    setBcState('scanning')
+    setBcDetected(null)
+    setSavedCount(null)
     startCamera()
     return () => {
       shouldScanRef.current = false
@@ -587,85 +581,28 @@ function WasteScanner() {
   // ── Barcode mode handlers ──
 
   async function handleWasteBarcode(barcode: string) {
-    setBcBarcode(barcode)
     const found =
       (await db.products.where('barcode').equals(barcode).first()) ??
       (await db.products.where('invoiceCode').equals(barcode).first())
     if (found) {
-      setBcProduct(found)
-      setBcQty(1)
-      setBcReason('expired')
-      setBcDate(todayStr())
-      setBcState('found')
+      setBcDetected({ product: found, barcode, name: found.name, qty: 1, reason: 'expired', date: todayStr() })
     } else {
-      setBcProductName('')
-      setBcQty(1)
-      setBcReason('expired')
-      setBcDate(todayStr())
-      setBcState('notfound')
+      setBcDetected({ product: null, barcode, name: '', qty: 1, reason: 'expired', date: todayStr() })
     }
   }
 
-  async function logBarcodeWaste() {
-    const productId = bcProduct?.id as number | undefined
-    const productName = (bcProduct?.name ?? bcProductName).trim()
-    if (!productName) { setBcError('Enter a product name'); return }
-    setBcError('')
-    setBcSaving(true)
-    try {
-      const wasteEntry: WasteEntry = {
-        productId: productId ?? 0,
-        productName,
-        quantity: bcQty,
-        wastedDate: bcDate,
-        reason: bcReason,
-      }
-      await db.wasteLog.add(wasteEntry)
-
-      if (productId) {
-        const batches = await db.expiryBatches
-          .where('productId').equals(productId)
-          .filter((b) => b.status === 'active')
-          .toArray()
-        let remaining = bcQty
-        for (const batch of batches.sort((a, b) => a.expiryDate.localeCompare(b.expiryDate))) {
-          if (remaining <= 0) break
-          const deduct = Math.min(batch.quantity, remaining)
-          const newQty = batch.quantity - deduct
-          await db.expiryBatches.update(batch.id!, {
-            quantity: newQty,
-            status: newQty <= 0 ? 'wasted' : 'active',
-          })
-          remaining -= deduct
-        }
-      }
-
-      setBcSessionLog((prev) => [...prev, { name: bcProduct?.name ?? bcProductName, qty: bcQty, reason: bcReason }])
-      setBcState('logged')
-      setTimeout(() => {
-        setBcState('scanning')
-        setBcBarcode('')
-        setBcProduct(null)
-        setBcProductName('')
-        setBcQty(1)
-        setBcReason('expired')
-        setBcDate(todayStr())
-        resumeScanning()
-      }, 1200)
-    } catch (e) {
-      setBcError(e instanceof Error ? e.message : 'Save failed')
-    } finally {
-      setBcSaving(false)
-    }
-  }
-
-  function bcScanAgain() {
-    setBcState('scanning')
-    setBcBarcode('')
-    setBcProduct(null)
-    setBcProductName('')
-    setBcQty(1)
-    setBcError('')
+  function stageWasteItem() {
+    if (!bcDetected) return
+    const name = bcDetected.product?.name ?? bcDetected.name
+    if (!name.trim()) return
+    setSessionLog(prev => [...prev, {
+      productName: name,
+      productId: bcDetected.product?.id,
+      qty: bcDetected.qty,
+      reason: bcDetected.reason,
+      wastedDate: bcDetected.date,
+    }])
+    setBcDetected(null)
     resumeScanning()
   }
 
@@ -802,14 +739,12 @@ function WasteScanner() {
   // ── Barcode mode render ──
 
   if (wasteMode === 'barcode') {
-    // Single return — <video> always stays in DOM so videoRef.current never goes null
-    // between state transitions. Hidden via CSS rather than conditional rendering.
     return (
       <div className="flex flex-col gap-4 p-4">
         {modeToggle}
 
-        {/* Video viewfinder — always mounted, hidden when reviewing a result */}
-        <div className={`relative rounded-2xl overflow-hidden bg-black aspect-video${bcState !== 'scanning' ? ' hidden' : ''}`}>
+        {/* Live camera viewfinder — always visible */}
+        <div className="relative rounded-2xl overflow-hidden bg-black aspect-video">
           {!cameraError ? (
             <>
               <video ref={videoRef} className="w-full h-full object-cover" playsInline muted style={isMirrored ? { transform: 'scaleX(-1)' } : undefined} />
@@ -819,92 +754,69 @@ function WasteScanner() {
                 <div className="absolute bottom-[7.5%] left-[7.5%] w-8 h-8 border-b-2 border-l-2 border-white/80 rounded-bl" />
                 <div className="absolute bottom-[7.5%] right-[7.5%] w-8 h-8 border-b-2 border-r-2 border-white/80 rounded-br" />
                 <p className="absolute bottom-3 left-0 right-0 text-center text-[11px] text-white/70">
-                  Point camera at any barcode
+                  {bcDetected ? 'Product detected — review below' : 'Point camera at any barcode'}
                 </p>
               </div>
             </>
           ) : (
-            <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
-              <p className="text-xs text-amber-700">{cameraError}</p>
+            <div className="absolute inset-0 bg-amber-50 flex items-center justify-center p-4">
+              <p className="text-xs text-amber-700 text-center">{cameraError}</p>
             </div>
           )}
         </div>
 
-        {/* Camera error shown outside the viewfinder when not scanning */}
-        {bcState !== 'scanning' && cameraError && (
-          <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
-            <p className="text-xs text-amber-700">{cameraError}</p>
-          </div>
-        )}
-
-        {/* Brief success flash after logging */}
-        {bcState === 'logged' && (
-          <div className="flex flex-col items-center justify-center gap-3 py-10">
-            <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center">
-              <CheckCircle2 size={24} className="text-green-600" />
-            </div>
-            <p className="text-sm font-semibold text-gray-900">Waste logged!</p>
-          </div>
-        )}
-
-        {/* Product review card (found or not found) */}
-        {(bcState === 'found' || bcState === 'notfound') && (
+        {/* Detected product card */}
+        {bcDetected && (
           <div className="bg-white border border-gray-100 rounded-xl p-4 flex flex-col gap-3">
-            {bcState === 'found' && bcProduct ? (
+            {bcDetected.product ? (
               <div className="flex items-center gap-3">
-                <div className="relative w-14 h-14 rounded-lg bg-gray-100 overflow-hidden flex items-center justify-center shrink-0">
-                  <ImageOff size={16} className="text-gray-300" />
-                  {bcProduct.imageUrl && (
-                    <img
-                      src={bcProduct.imageUrl}
-                      alt=""
-                      className="absolute inset-0 w-full h-full object-cover"
-                      onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
-                    />
+                <div className="relative w-12 h-12 rounded-lg bg-gray-100 overflow-hidden flex items-center justify-center shrink-0">
+                  <ImageOff size={14} className="text-gray-300" />
+                  {bcDetected.product.imageUrl && (
+                    <img src={bcDetected.product.imageUrl} alt="" className="absolute inset-0 w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
                   )}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-gray-900 truncate">{bcProduct.name}</p>
-                  <p className="text-[11px] text-gray-400">#{bcProduct.invoiceCode}</p>
+                  <p className="text-sm font-semibold text-gray-900 truncate">{bcDetected.product.name}</p>
+                  <p className="text-[11px] text-gray-400">#{bcDetected.product.invoiceCode}</p>
                 </div>
               </div>
             ) : (
               <div className="flex flex-col gap-2">
                 <div className="flex items-center gap-2">
-                  <AlertCircle size={16} className="text-amber-400 shrink-0" />
-                  <p className="text-sm text-gray-700">Barcode not in database</p>
+                  <AlertCircle size={15} className="text-amber-400 shrink-0" />
+                  <p className="text-sm text-gray-700">Not in database — enter name</p>
                 </div>
-                <p className="text-[11px] text-gray-400 font-mono">{bcBarcode}</p>
+                <p className="text-[11px] text-gray-400 font-mono">{bcDetected.barcode}</p>
                 <input
                   type="text"
                   placeholder="Product name"
-                  value={bcProductName}
-                  onChange={(e) => setBcProductName(e.target.value)}
+                  value={bcDetected.name}
+                  onChange={(e) => setBcDetected(d => d ? { ...d, name: e.target.value } : d)}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
               </div>
             )}
 
-            {/* Qty + Reason + Date */}
             <div className="flex items-center gap-2">
               <div className="flex items-center gap-1">
                 <button
-                  onClick={() => setBcQty((q) => Math.max(1, q - 1))}
+                  onClick={() => setBcDetected(d => d ? { ...d, qty: Math.max(1, d.qty - 1) } : d)}
                   className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center text-gray-600"
                 >
                   <Minus size={12} />
                 </button>
-                <span className="w-8 text-center text-sm font-semibold text-gray-900">{bcQty}</span>
+                <span className="w-8 text-center text-sm font-semibold text-gray-900">{bcDetected.qty}</span>
                 <button
-                  onClick={() => setBcQty((q) => q + 1)}
+                  onClick={() => setBcDetected(d => d ? { ...d, qty: d.qty + 1 } : d)}
                   className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center text-gray-600"
                 >
                   <Plus size={12} />
                 </button>
               </div>
               <select
-                value={bcReason}
-                onChange={(e) => setBcReason(e.target.value as StagedWasteEntry['reason'])}
+                value={bcDetected.reason}
+                onChange={(e) => setBcDetected(d => d ? { ...d, reason: e.target.value as StagedWasteEntry['reason'] } : d)}
                 className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1.5"
               >
                 <option value="expired">Expired</option>
@@ -913,48 +825,40 @@ function WasteScanner() {
               </select>
               <input
                 type="date"
-                value={bcDate}
-                onChange={(e) => setBcDate(e.target.value)}
+                value={bcDetected.date}
+                onChange={(e) => setBcDetected(d => d ? { ...d, date: e.target.value } : d)}
                 className="text-xs border border-gray-200 rounded-lg px-2 py-1.5"
               />
             </div>
 
-            {bcError && <p className="text-xs text-red-500">{bcError}</p>}
-
             <div className="flex gap-2">
               <button
-                onClick={bcScanAgain}
+                onClick={() => { setBcDetected(null); resumeScanning() }}
                 className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium"
               >
-                Scan Again
+                Dismiss
               </button>
               <button
-                onClick={logBarcodeWaste}
-                disabled={bcSaving || (bcState === 'notfound' && !bcProductName.trim())}
-                className="flex-1 py-2.5 bg-red-600 text-white rounded-xl text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2"
+                onClick={stageWasteItem}
+                disabled={!bcDetected.product && !bcDetected.name.trim()}
+                className="flex-1 py-2.5 bg-red-600 text-white rounded-xl text-sm font-semibold disabled:opacity-50"
               >
-                {bcSaving && <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />}
-                Log Waste
+                Add to Waste →
               </button>
             </div>
           </div>
         )}
 
-        {/* Barcode session summary */}
-        {bcSessionLog.length > 0 && (
-          <div className="mt-1">
-            <div className="flex items-center justify-between mb-1.5 px-0.5">
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                Logged this session ({bcSessionLog.length})
-              </p>
-              <button onClick={() => setBcSessionLog([])} className="text-[11px] text-gray-400 underline">
-                Clear
-              </button>
-            </div>
+        {/* Staged waste list — reuses sessionLog + logAllWaste */}
+        {sessionLog.length > 0 && (
+          <div className="flex flex-col gap-2">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide px-0.5">
+              Staged ({sessionLog.length})
+            </p>
             <div className="bg-white border border-gray-100 rounded-xl overflow-hidden max-h-48 overflow-y-auto">
-              {[...bcSessionLog].reverse().map((item, i) => (
+              {[...sessionLog].reverse().map((item, i) => (
                 <div key={i} className="flex items-center justify-between px-3 py-2 border-b border-gray-50 last:border-0">
-                  <p className="text-sm text-gray-800 truncate flex-1">{item.name}</p>
+                  <p className="text-sm text-gray-800 truncate flex-1">{item.productName}</p>
                   <div className="flex items-center gap-2 shrink-0 ml-2">
                     <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
                       item.reason === 'expired' ? 'bg-red-100 text-red-700'
@@ -966,6 +870,20 @@ function WasteScanner() {
                 </div>
               ))}
             </div>
+            {error && (
+              <div className="flex items-start gap-2 bg-red-50 border border-red-100 rounded-xl px-3 py-2.5">
+                <AlertCircle size={14} className="text-red-500 mt-0.5 shrink-0" />
+                <p className="text-xs text-red-600">{error}</p>
+              </div>
+            )}
+            <button
+              onClick={logAllWaste}
+              disabled={saving}
+              className="w-full bg-red-600 text-white text-sm font-semibold py-3 rounded-xl disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {saving && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+              {saving ? 'Saving…' : `Log All Waste (${sessionLog.length})`}
+            </button>
           </div>
         )}
       </div>
@@ -1164,17 +1082,16 @@ function WasteScanner() {
 
 // ─── Add to Order Scanner (Mode C) ───────────────────────────────────────────
 
-type ScanState = 'scanning' | 'found' | 'notfound' | 'added'
-
 function AddToOrderScanner() {
-  const [scanState, setScanState] = useState<ScanState>('scanning')
-  const [detectedBarcode, setDetectedBarcode] = useState('')
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [product, setProduct] = useState<any | null>(null)
-  const [qty, setQty] = useState(1)
-  const [addError, setAddError] = useState('')
+  const [detected, setDetected] = useState<{ product: any; qty: number } | null>(null)
+  const [notFound, setNotFound] = useState('')
+  const [stagedItems, setStagedItems] = useState<Array<{
+    productId: number; name: string; invoiceCode: string; qty: number; unitPrice: number
+  }>>([])
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState('')
   const [manualInput, setManualInput] = useState('')
-  const [sessionItems, setSessionItems] = useState<Array<{ name: string; qty: number }>>([])
 
   const { videoRef, cameraError, isMirrored, startCamera, stopCamera, resumeScanning, shouldScanRef } =
     useBarcodeCamera(handleBarcode)
@@ -1190,16 +1107,15 @@ function AddToOrderScanner() {
   }, [])
 
   async function handleBarcode(barcode: string) {
-    setDetectedBarcode(barcode)
     const found =
       (await db.products.where('barcode').equals(barcode).first()) ??
       (await db.products.where('invoiceCode').equals(barcode).first())
     if (found) {
-      setProduct(found)
-      setQty(1)
-      setScanState('found')
+      setDetected({ product: found, qty: 1 })
+      setNotFound('')
     } else {
-      setScanState('notfound')
+      setNotFound(barcode)
+      setDetected(null)
     }
   }
 
@@ -1207,12 +1123,34 @@ function AddToOrderScanner() {
     const val = manualInput.trim()
     if (!val) return
     shouldScanRef.current = false
+    setManualInput('')
     await handleBarcode(val)
   }
 
-  async function handleAddToOrder() {
-    if (!product) return
-    setAddError('')
+  function stageItem() {
+    if (!detected) return
+    setStagedItems(prev => [...prev, {
+      productId: detected.product.id,
+      name: detected.product.name,
+      invoiceCode: detected.product.invoiceCode,
+      qty: detected.qty,
+      unitPrice: detected.product.lactalisCostPrice ?? 0,
+    }])
+    setDetected(null)
+    setNotFound('')
+    resumeScanning()
+  }
+
+  function dismissDetected() {
+    setDetected(null)
+    setNotFound('')
+    resumeScanning()
+  }
+
+  async function submitAll() {
+    if (stagedItems.length === 0) return
+    setSubmitting(true)
+    setSubmitError('')
     try {
       let order = await db.orders.where('status').equals('draft').last()
       if (!order) {
@@ -1227,52 +1165,40 @@ function AddToOrderScanner() {
         })) as number
         order = await db.orders.get(newId)
       }
-
-      const lines = await db.orderLines.where('orderId').equals(order!.id!).toArray()
-      const existingLine = lines.find((l) => l.productId === product.id)
-      if (existingLine) {
-        const newQty = existingLine.approvedQty + qty
-        await db.orderLines.update(existingLine.id!, {
-          approvedQty: newQty,
-          lineTotal: newQty * (product.lactalisCostPrice ?? 0),
-        })
-      } else {
-        await db.orderLines.add({
-          orderId: order!.id!,
-          productId: product.id!,
-          itemNumber: product.invoiceCode,
-          productName: product.name,
-          suggestedQty: qty,
-          approvedQty: qty,
-          unitPrice: product.lactalisCostPrice ?? 0,
-          lineTotal: qty * (product.lactalisCostPrice ?? 0),
-        })
+      for (const item of stagedItems) {
+        const lines = await db.orderLines.where('orderId').equals(order!.id!).toArray()
+        const existing = lines.find(l => l.productId === item.productId)
+        if (existing) {
+          const newQty = existing.approvedQty + item.qty
+          await db.orderLines.update(existing.id!, {
+            approvedQty: newQty,
+            lineTotal: newQty * item.unitPrice,
+          })
+        } else {
+          await db.orderLines.add({
+            orderId: order!.id!,
+            productId: item.productId,
+            itemNumber: item.invoiceCode,
+            productName: item.name,
+            suggestedQty: item.qty,
+            approvedQty: item.qty,
+            unitPrice: item.unitPrice,
+            lineTotal: item.qty * item.unitPrice,
+          })
+        }
       }
-
-      setSessionItems((prev) => [...prev, { name: product!.name, qty }])
-      setScanState('added')
-      setTimeout(() => scanAgain(), 1500)
+      setStagedItems([])
     } catch (e) {
-      setAddError(e instanceof Error ? e.message : 'Failed to add to order')
+      setSubmitError(e instanceof Error ? e.message : 'Failed to submit order')
+    } finally {
+      setSubmitting(false)
     }
   }
 
-  function scanAgain() {
-    setProduct(null)
-    setDetectedBarcode('')
-    setManualInput('')
-    setQty(1)
-    setAddError('')
-    setScanState('scanning')
-    resumeScanning()
-  }
-
-  // ── Single return — <video> always stays in DOM so videoRef.current never
-  //    goes null between state transitions. Hidden via CSS, not unmounted. ────
   return (
     <div className="flex flex-col gap-4 p-4">
-      {/* Video viewfinder — always mounted, hidden when reviewing a result */}
-      <div className={`relative rounded-2xl overflow-hidden bg-black aspect-video${scanState !== 'scanning' ? ' hidden' : ''}`}>
+      {/* Live camera viewfinder — always visible */}
+      <div className="relative rounded-2xl overflow-hidden bg-black aspect-video">
         {!cameraError ? (
           <>
             <video ref={videoRef} className="w-full h-full object-cover" playsInline muted style={isMirrored ? { transform: 'scaleX(-1)' } : undefined} />
@@ -1282,96 +1208,126 @@ function AddToOrderScanner() {
               <div className="absolute bottom-[7.5%] left-[7.5%] w-8 h-8 border-b-2 border-l-2 border-white/80 rounded-bl" />
               <div className="absolute bottom-[7.5%] right-[7.5%] w-8 h-8 border-b-2 border-r-2 border-white/80 rounded-br" />
               <p className="absolute bottom-3 left-0 right-0 text-center text-[11px] text-white/70">
-                Point camera at a barcode
+                {detected || notFound ? 'Item detected — review below' : 'Point camera at a barcode'}
               </p>
             </div>
           </>
         ) : (
-          <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
-            <p className="text-xs text-amber-700">{cameraError}</p>
+          <div className="absolute inset-0 bg-amber-50 flex items-center justify-center p-4">
+            <p className="text-xs text-amber-700 text-center">{cameraError}</p>
           </div>
         )}
       </div>
 
-      {/* Camera error shown outside viewfinder when not scanning */}
-      {scanState !== 'scanning' && cameraError && (
-        <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
-          <p className="text-xs text-amber-700">{cameraError}</p>
-        </div>
-      )}
-
-      {/* Success flash */}
-      {scanState === 'added' && (
-        <div className="flex flex-col items-center justify-center gap-3 py-12 px-6 text-center">
-          <div className="w-14 h-14 rounded-full bg-green-100 flex items-center justify-center">
-            <CheckCircle2 size={28} className="text-green-600" />
-          </div>
-          <p className="text-base font-semibold text-gray-900">Added to draft order!</p>
-          <p className="text-sm text-gray-500">{product?.name}</p>
-        </div>
-      )}
-
-      {/* Result card — found */}
-      {scanState === 'found' && product && (
+      {/* Detected product card */}
+      {detected && (
         <div className="bg-white border border-gray-100 rounded-xl p-4 flex flex-col gap-3">
           <div className="flex items-center gap-3">
             <div className="relative w-14 h-14 rounded-lg bg-gray-100 overflow-hidden flex items-center justify-center shrink-0">
               <ImageOff size={16} className="text-gray-300" />
-              {product.imageUrl && (
-                <img src={product.imageUrl} alt="" className="absolute inset-0 w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+              {detected.product.imageUrl && (
+                <img src={detected.product.imageUrl} alt="" className="absolute inset-0 w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
               )}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-gray-900 truncate">{product.name}</p>
-              <p className="text-[11px] text-gray-400">#{product.invoiceCode}</p>
-              {product.orderUnit && (
-                <p className="text-[11px] text-gray-400">{product.orderUnit}</p>
+              <p className="text-sm font-semibold text-gray-900 truncate">{detected.product.name}</p>
+              <p className="text-[11px] text-gray-400">#{detected.product.invoiceCode}</p>
+              {detected.product.orderUnit && (
+                <p className="text-[11px] text-gray-400">{detected.product.orderUnit}</p>
               )}
             </div>
           </div>
           <div className="flex items-center gap-3">
             <span className="text-xs text-gray-500">Qty:</span>
             <div className="flex items-center gap-2">
-              <button onClick={() => setQty((q) => Math.max(1, q - 1))}
+              <button onClick={() => setDetected(d => d ? { ...d, qty: Math.max(1, d.qty - 1) } : d)}
                 className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-600">
                 <Minus size={13} />
               </button>
-              <span className="w-8 text-center text-sm font-semibold text-gray-900">{qty}</span>
-              <button onClick={() => setQty((q) => q + 1)}
+              <span className="w-8 text-center text-sm font-semibold text-gray-900">{detected.qty}</span>
+              <button onClick={() => setDetected(d => d ? { ...d, qty: d.qty + 1 } : d)}
                 className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-600">
                 <Plus size={13} />
               </button>
             </div>
           </div>
-          {addError && <p className="text-xs text-red-500">{addError}</p>}
           <div className="flex gap-2">
-            <button onClick={scanAgain}
+            <button onClick={dismissDetected}
               className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium">
-              Scan Again
+              Dismiss
             </button>
-            <button onClick={handleAddToOrder}
+            <button onClick={stageItem}
               className="flex-1 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-semibold">
-              Add to Order
+              Add to List →
             </button>
           </div>
         </div>
       )}
 
-      {/* Result card — not found */}
-      {scanState === 'notfound' && (
-        <div className="bg-white border border-gray-100 rounded-xl p-4 flex flex-col gap-3 items-center text-center">
-          <AlertCircle size={28} className="text-amber-400" />
-          <p className="text-sm font-semibold text-gray-900">Product not found</p>
-          <p className="text-xs text-gray-500 font-mono">{detectedBarcode}</p>
-          <button onClick={scanAgain}
-            className="w-full py-2.5 bg-blue-600 text-white rounded-xl text-sm font-semibold">
-            Scan Again
+      {/* Not found notice */}
+      {notFound && (
+        <div className="bg-amber-50 border border-amber-100 rounded-xl p-4 flex flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <AlertCircle size={16} className="text-amber-500 shrink-0" />
+            <p className="text-sm font-medium text-amber-800">Product not found</p>
+          </div>
+          <p className="text-[11px] text-gray-500 font-mono">{notFound}</p>
+          <button onClick={dismissDetected}
+            className="self-start text-xs text-amber-700 border border-amber-200 rounded-lg px-3 py-1.5 font-medium">
+            Scan Next
           </button>
         </div>
       )}
 
-      {/* Manual barcode entry fallback */}
-      {scanState === 'scanning' && <div className="flex gap-2">
+      {/* Staged list */}
+      {stagedItems.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide px-0.5">
+            Staged ({stagedItems.length})
+          </p>
+          <div className="bg-white border border-gray-100 rounded-xl overflow-hidden">
+            {stagedItems.map((item, i) => (
+              <div key={i} className="flex items-center gap-2 px-3 py-2.5 border-b border-gray-50 last:border-0">
+                <p className="text-sm text-gray-800 flex-1 truncate">{item.name}</p>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    onClick={() => setStagedItems(prev => prev.map((s, idx) => idx === i ? { ...s, qty: Math.max(1, s.qty - 1) } : s))}
+                    className="w-6 h-6 rounded-full bg-gray-100 flex items-center justify-center text-gray-600">
+                    <Minus size={11} />
+                  </button>
+                  <span className="w-7 text-center text-sm font-semibold text-gray-900">{item.qty}</span>
+                  <button
+                    onClick={() => setStagedItems(prev => prev.map((s, idx) => idx === i ? { ...s, qty: s.qty + 1 } : s))}
+                    className="w-6 h-6 rounded-full bg-gray-100 flex items-center justify-center text-gray-600">
+                    <Plus size={11} />
+                  </button>
+                </div>
+                <button onClick={() => setStagedItems(prev => prev.filter((_, idx) => idx !== i))}
+                  className="p-1 text-gray-300 hover:text-red-400 shrink-0">
+                  <X size={13} />
+                </button>
+              </div>
+            ))}
+          </div>
+          {submitError && (
+            <div className="flex items-start gap-2 bg-red-50 border border-red-100 rounded-xl px-3 py-2.5">
+              <AlertCircle size={14} className="text-red-500 mt-0.5 shrink-0" />
+              <p className="text-xs text-red-600">{submitError}</p>
+            </div>
+          )}
+          <button
+            onClick={submitAll}
+            disabled={submitting}
+            className="w-full bg-green-600 text-white text-sm font-semibold py-3 rounded-xl disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {submitting && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+            {submitting ? 'Submitting…' : `Submit All to Order (${stagedItems.length})`}
+          </button>
+        </div>
+      )}
+
+      {/* Manual barcode entry — always shown */}
+      <div className="flex gap-2">
         <input
           type="text"
           placeholder="Enter barcode manually…"
@@ -1387,29 +1343,7 @@ function AddToOrderScanner() {
         >
           Look Up
         </button>
-      </div>}
-
-      {/* Session summary */}
-      {sessionItems.length > 0 && (
-        <div className="mt-1">
-          <div className="flex items-center justify-between mb-1.5 px-0.5">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-              Added this session ({sessionItems.length})
-            </p>
-            <button onClick={() => setSessionItems([])} className="text-[11px] text-gray-400 underline">
-              Clear
-            </button>
-          </div>
-          <div className="bg-white border border-gray-100 rounded-xl overflow-hidden max-h-48 overflow-y-auto">
-            {[...sessionItems].reverse().map((item, i) => (
-              <div key={i} className="flex items-center justify-between px-3 py-2 border-b border-gray-50 last:border-0">
-                <p className="text-sm text-gray-800 truncate flex-1">{item.name}</p>
-                <span className="text-sm font-semibold text-gray-700 shrink-0 ml-2">×{item.qty}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      </div>
     </div>
   )
 }
