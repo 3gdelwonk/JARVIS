@@ -555,7 +555,7 @@ function WasteScanner() {
   const [reviewItems, setReviewItems] = useState<StagedWasteEntry[]>([])
   const [sessionLog, setSessionLog] = useState<StagedWasteEntry[]>([])
   const [saving, setSaving] = useState(false)
-  const [savedCount, setSavedCount] = useState<number | null>(null)
+  const [wasteSummary, setWasteSummary] = useState<StagedWasteEntry[] | null>(null)
   const [error, setError] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -569,7 +569,6 @@ function WasteScanner() {
     if (wasteMode !== 'barcode') return
     shouldScanRef.current = true
     setBcDetected(null)
-    setSavedCount(null)
     startCamera()
     return () => {
       shouldScanRef.current = false
@@ -668,7 +667,6 @@ function WasteScanner() {
     setPreview('')
     setParsedItems(null)
     setReviewItems([])
-    setSavedCount(null)
   }
 
   async function logAllWaste() {
@@ -704,7 +702,7 @@ function WasteScanner() {
           }
         }
       }
-      setSavedCount(sessionLog.length)
+      setWasteSummary([...sessionLog])
       setSessionLog([])
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Save failed')
@@ -736,11 +734,54 @@ function WasteScanner() {
     </div>
   )
 
+  // ── Waste session summary modal (shared across both modes) ──
+
+  const wasteSummaryModal = wasteSummary && (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl w-full max-w-[380px] flex flex-col overflow-hidden shadow-xl">
+        <div className="px-5 pt-5 pb-4 flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-full bg-red-100 flex items-center justify-center shrink-0">
+              <CheckCircle2 size={18} className="text-red-600" />
+            </div>
+            <p className="text-base font-semibold text-gray-900">Waste Session Logged</p>
+          </div>
+          <p className="text-xs text-gray-400 pl-10">{wasteSummary.length} {wasteSummary.length === 1 ? 'entry' : 'entries'} saved</p>
+        </div>
+        <div className="border-t border-gray-100 mx-4" />
+        <div className="overflow-y-auto max-h-52">
+          {wasteSummary.map((item, i) => (
+            <div key={i} className="flex items-center justify-between px-5 py-2.5 border-b border-gray-50 last:border-0">
+              <p className="text-sm text-gray-800 truncate flex-1">{item.productName}</p>
+              <div className="flex items-center gap-2 shrink-0 ml-3">
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                  item.reason === 'expired' ? 'bg-red-100 text-red-700'
+                  : item.reason === 'damaged' ? 'bg-amber-100 text-amber-700'
+                  : 'bg-gray-100 text-gray-600'
+                }`}>{item.reason}</span>
+                <span className="text-sm font-semibold text-gray-700">×{item.qty}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="px-4 py-4">
+          <button
+            onClick={() => setWasteSummary(null)}
+            className="w-full py-3 bg-red-600 text-white text-sm font-semibold rounded-xl"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+
   // ── Barcode mode render ──
 
   if (wasteMode === 'barcode') {
     return (
       <div className="flex flex-col gap-4 p-4">
+        {wasteSummaryModal}
         {modeToggle}
 
         {/* Live camera viewfinder — always visible */}
@@ -892,29 +933,9 @@ function WasteScanner() {
 
   // ── Photo mode render ──
 
-  if (savedCount !== null) {
-    return (
-      <div className="flex flex-col gap-4 p-4">
-        {modeToggle}
-        <div className="flex flex-col items-center justify-center gap-4 py-8 text-center">
-          <div className="w-14 h-14 rounded-full bg-green-100 flex items-center justify-center">
-            <CheckCircle2 size={28} className="text-green-600" />
-          </div>
-          <p className="text-base font-semibold text-gray-900">Waste logged!</p>
-          <p className="text-sm text-gray-500">{savedCount} entries saved</p>
-          <button
-            onClick={() => setSavedCount(null)}
-            className="mt-2 bg-blue-600 text-white text-sm font-medium px-6 py-2.5 rounded-xl"
-          >
-            Log More
-          </button>
-        </div>
-      </div>
-    )
-  }
-
   return (
     <div className="flex flex-col gap-4 p-4">
+      {wasteSummaryModal}
       {modeToggle}
 
       {/* Session counter */}
@@ -1082,7 +1103,7 @@ function WasteScanner() {
 
 // ─── Add to Order Scanner (Mode C) ───────────────────────────────────────────
 
-function AddToOrderScanner() {
+function AddToOrderScanner({ onNavigateToOrders }: { onNavigateToOrders?: () => void }) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [detected, setDetected] = useState<{ product: any; qty: number } | null>(null)
   const [notFound, setNotFound] = useState('')
@@ -1092,6 +1113,11 @@ function AddToOrderScanner() {
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState('')
   const [manualInput, setManualInput] = useState('')
+  const [submitSummary, setSubmitSummary] = useState<{
+    items: Array<{ productId: number; name: string; invoiceCode: string; qty: number; unitPrice: number }>;
+    total: number;
+    deliveryDate: string;
+  } | null>(null)
 
   const { videoRef, cameraError, isMirrored, startCamera, stopCamera, resumeScanning, shouldScanRef } =
     useBarcodeCamera(handleBarcode)
@@ -1187,6 +1213,8 @@ function AddToOrderScanner() {
           })
         }
       }
+      const total = stagedItems.reduce((s, i) => s + i.qty * i.unitPrice, 0)
+      setSubmitSummary({ items: [...stagedItems], total, deliveryDate: order!.deliveryDate })
       setStagedItems([])
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : 'Failed to submit order')
@@ -1197,6 +1225,55 @@ function AddToOrderScanner() {
 
   return (
     <div className="flex flex-col gap-4 p-4">
+      {/* Order summary modal */}
+      {submitSummary && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-[380px] flex flex-col overflow-hidden shadow-xl">
+            <div className="px-5 pt-5 pb-4 flex flex-col gap-1">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center shrink-0">
+                  <CheckCircle2 size={18} className="text-green-600" />
+                </div>
+                <p className="text-base font-semibold text-gray-900">Added to Draft Order</p>
+              </div>
+              <p className="text-xs text-gray-400 pl-10">
+                Delivery: {new Date(submitSummary.deliveryDate + 'T00:00:00').toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' })}
+              </p>
+            </div>
+            <div className="border-t border-gray-100 mx-4" />
+            <div className="overflow-y-auto max-h-52">
+              {submitSummary.items.map((item, i) => (
+                <div key={i} className="flex items-center justify-between px-5 py-2.5 border-b border-gray-50 last:border-0">
+                  <p className="text-sm text-gray-800 truncate flex-1">{item.name}</p>
+                  <span className="text-sm font-semibold text-gray-700 shrink-0 ml-3">×{item.qty}</span>
+                </div>
+              ))}
+            </div>
+            <div className="border-t border-gray-100 mx-4" />
+            <div className="px-5 py-3 flex items-center justify-between">
+              <span className="text-xs text-gray-500">Est. Total</span>
+              <span className="text-sm font-semibold text-gray-900">${submitSummary.total.toFixed(2)}</span>
+            </div>
+            <div className="px-4 pb-4 flex flex-col gap-2">
+              {onNavigateToOrders && (
+                <button
+                  onClick={() => { setSubmitSummary(null); onNavigateToOrders() }}
+                  className="w-full py-3 bg-green-600 text-white text-sm font-semibold rounded-xl"
+                >
+                  Go to Order Tab →
+                </button>
+              )}
+              <button
+                onClick={() => setSubmitSummary(null)}
+                className="w-full py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium"
+              >
+                Continue Scanning
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Live camera viewfinder — always visible */}
       <div className="relative rounded-2xl overflow-hidden bg-black aspect-video">
         {!cameraError ? (
@@ -1615,7 +1692,7 @@ ${storeName}`.trim()
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function ScannerTab() {
+export default function ScannerTab({ onNavigateToOrders }: { onNavigateToOrders?: () => void }) {
   const [apiKey, setApiKey] = useState<string | null>(() => localStorage.getItem(API_KEY_STORAGE))
   const [mode, setMode] = useState<'invoice' | 'waste' | 'addtoorder' | 'claim'>('invoice')
 
@@ -1676,7 +1753,7 @@ export default function ScannerTab() {
 
       <div className="flex-1 overflow-auto">
         {mode === 'addtoorder'
-          ? <AddToOrderScanner />
+          ? <AddToOrderScanner onNavigateToOrders={onNavigateToOrders} />
           : mode === 'claim'
             ? <ClaimScanner />
             : mode === 'waste'

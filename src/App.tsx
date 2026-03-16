@@ -109,7 +109,7 @@ export default function App() {
     switch (activeTab) {
       case 'dashboard': return <Dashboard onNavigateToOrder={() => handleTabChange('order')} />
       case 'order':     return <OrderBuilder />
-      case 'scanner':   return <ScannerTab />
+      case 'scanner':   return <ScannerTab onNavigateToOrders={() => handleTabChange('order')} />
       case 'expiry':    return <ExpiryTab />
       case 'insights':  return <InsightsTab />
       case 'import':    return <ImportTab />
