@@ -11,6 +11,7 @@ import type {
   ExpiryBatch,
   WasteEntry,
   ClaimRecord,
+  PhotoRecord,
 } from './types'
 import { SEED_PRODUCTS } from '../data/seedProducts'
 import { PRODUCT_IMAGE_MAP } from '../data/productImageMap'
@@ -27,6 +28,7 @@ export class MilkManagerDB extends Dexie {
   expiryBatches!: Table<ExpiryBatch>
   wasteLog!: Table<WasteEntry>
   claimRecords!: Table<ClaimRecord>
+  photoRecords!: Table<PhotoRecord>
 
   constructor() {
     super('MilkManagerDB')
@@ -54,6 +56,11 @@ export class MilkManagerDB extends Dexie {
     this.version(4).stores({
       claimRecords: '++id, productId, claimType, createdAt',
     })
+    // v5 — photo storage + claim orderId
+    this.version(5).stores({
+      photoRecords: '++id, orderId, claimId, productId, photoType, capturedAt',
+      claimRecords: '++id, productId, claimType, createdAt, orderId',
+    })
   }
 }
 
@@ -64,6 +71,7 @@ export async function clearAllData(): Promise<void> {
     db.invoiceRecords, db.invoiceLines, db.priceHistory,
     db.stockSnapshots, db.orders, db.orderLines,
     db.expiryBatches, db.wasteLog, db.products, db.claimRecords,
+    db.photoRecords,
   ], async () => {
     await Promise.all([
       db.invoiceRecords.clear(),
@@ -76,6 +84,7 @@ export async function clearAllData(): Promise<void> {
       db.wasteLog.clear(),
       db.products.clear(),
       db.claimRecords.clear(),
+      db.photoRecords.clear(),
     ])
   })
   // Re-seed the product catalogue

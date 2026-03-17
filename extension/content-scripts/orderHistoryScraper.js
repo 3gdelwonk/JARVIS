@@ -1,15 +1,13 @@
 /**
  * orderHistoryScraper.js — Lactalis portal order history extractor
  *
- * Loaded as a content script on all https://*.lactalis.com.au/* pages.
- * Activates only on /customer/order/ pages.
+ * Loaded as a content script on ALL https://*.lactalis.com.au/* pages.
+ * Primary strategy: fetch('/customer/order/') from any page (like scheduleScraper).
+ * Fallback: DOM scraping when actually on the order history page.
  *
- * Scrapes the order history table and (on detail pages) line items.
- * Stores results in chrome.storage.local key 'orderHistory'.
- *
- * Storage format:
+ * Storage format (chrome.storage.local key: 'orderHistory'):
  * {
- *   orders: [{ orderNumber, createdAt, deliveryDate, orderStatus, refNumber, totalQty, total, lineItems? }],
+ *   orders: [{ orderNumber, createdAt, deliveryDate, orderStatus, refNumber, totalQty, total }],
  *   scrapedAt: number,
  * }
  */
@@ -19,27 +17,12 @@
 
   const DEBUG = false
 
-  // Only run on order-related pages
-  const url = location.href.toLowerCase()
-  const isOrderListPage = url.includes('/customer/order') && !url.includes('/customer/order/view')
-  const isOrderDetailPage = url.includes('/customer/order/view')
-
-  if (!isOrderListPage && !isOrderDetailPage) return
-
   // Avoid double-injection
   if (window.__milkManagerOrderScraperActive__) return
   window.__milkManagerOrderScraperActive__ = true
 
-  if (DEBUG) console.log('[Milk Manager Order Scraper] Active on:', isOrderListPage ? 'list' : 'detail')
-
   // ─── Date parsing ─────────────────────────────────────────────────────────
 
-  /**
-   * Parse AU date formats:
-   *   "17/3/2026, 11:53 AM" → "2026-03-17"
-   *   "18/3/2026" → "2026-03-18"
-   *   "13/3/2026" → "2026-03-13"
-   */
   function parseAUDate(text) {
     if (!text) return null
     const m = text.trim().match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/)
@@ -55,7 +38,6 @@
     if (!text) return null
     const date = parseAUDate(text)
     if (!date) return null
-    // Try to extract time part
     const timeMatch = text.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i)
     if (timeMatch) {
       let h = Number(timeMatch[1])
@@ -68,10 +50,10 @@
     return date
   }
 
-  // ─── Order list scraper ───────────────────────────────────────────────────
+  // ─── Table parser (works on any Document/Element) ─────────────────────────
 
-  function scrapeOrderListTable() {
-    const tables = document.querySelectorAll('table')
+  function scrapeOrderListFromDoc(doc) {
+    const tables = doc.querySelectorAll('table')
     if (tables.length === 0) return []
 
     for (const table of tables) {
@@ -79,20 +61,16 @@
         (th) => (th.innerText ?? th.textContent ?? '').trim().toLowerCase()
       )
 
-      // Must have "order number" column to be the right table
       const orderNumIdx = headers.findIndex((h) => h.includes('order') && h.includes('number'))
       if (orderNumIdx < 0) continue
 
-      // Map column indices by header text
       const createdAtIdx = headers.findIndex((h) => h.includes('created'))
       const deliveryDateIdx = headers.findIndex((h) => h.includes('delivery') && h.includes('date'))
 
-      // Two "order status" columns — first is typically "Open", second is "Created"/"Delivered"
       const statusIndices = []
       headers.forEach((h, i) => {
         if (h.includes('order') && h.includes('status')) statusIndices.push(i)
       })
-      // The meaningful status is the second one (Created/Delivered), fall back to first
       const orderStatusIdx = statusIndices.length >= 2 ? statusIndices[1] : statusIndices[0] ?? -1
 
       const refNumIdx = headers.findIndex((h) => h.includes('ref') && h.includes('number'))
@@ -112,13 +90,6 @@
         const orderNumber = orderNumIdx >= 0 ? cells[orderNumIdx] : null
         if (!orderNumber) continue
 
-        // Extract the detail page link from the row (eye icon or order number link)
-        let detailUrl = null
-        const links = row.querySelectorAll('a[href*="/customer/order/view"]')
-        if (links.length > 0) {
-          detailUrl = links[0].href
-        }
-
         orders.push({
           orderNumber,
           createdAt: createdAtIdx >= 0 ? parseAUDateTime(cells[createdAtIdx]) : null,
@@ -128,12 +99,11 @@
           totalQty: totalQtyIdx >= 0 ? Number(cells[totalQtyIdx]) || 0 : 0,
           total: totalIdx >= 0 ? parseFloat((cells[totalIdx] || '').replace(/[$,]/g, '')) || 0 : 0,
           onlineOrder: onlineIdx >= 0 ? cells[onlineIdx].toLowerCase() === 'yes' : null,
-          detailUrl,
         })
       }
 
       if (orders.length > 0) {
-        if (DEBUG) console.log(`[Milk Manager Order Scraper] Found ${orders.length} orders in table`)
+        if (DEBUG) console.log(`[Milk Manager Order Scraper] Found ${orders.length} orders`)
         return orders
       }
     }
@@ -141,9 +111,44 @@
     return []
   }
 
-  // ─── Order detail scraper (line items) ────────────────────────────────────
+  // ─── Strategy 0: Fetch order history page via API (works from any page) ───
+
+  async function fetchOrderHistoryAPI() {
+    try {
+      const resp = await fetch('/customer/order/', {
+        credentials: 'include',
+        headers: { 'Accept': 'text/html' },
+      })
+      if (!resp.ok) return null
+      const html = await resp.text()
+
+      // Check for login redirect or Incapsula block
+      if (html.includes('login') && html.length < 2000) return null
+      if (html.includes('_Incapsula_') || html.includes('incap_ses')) return null
+
+      const doc = new DOMParser().parseFromString(html, 'text/html')
+      const orders = scrapeOrderListFromDoc(doc)
+      return orders.length > 0 ? orders : null
+    } catch (e) {
+      if (DEBUG) console.log('[Milk Manager Order Scraper] Fetch API failed:', e.message)
+      return null
+    }
+  }
+
+  // ─── Strategy 1: DOM scraping (when on the order history page) ────────────
+
+  function scrapeLivePage() {
+    const url = location.href.toLowerCase()
+    if (!url.includes('/customer/order') || url.includes('/customer/order/view')) return null
+    return scrapeOrderListFromDoc(document)
+  }
+
+  // ─── Order detail scraper (line items — only on detail pages) ─────────────
 
   function scrapeOrderDetailLines() {
+    const url = location.href.toLowerCase()
+    if (!url.includes('/customer/order/view')) return null
+
     const tables = document.querySelectorAll('table')
     const lines = []
 
@@ -152,7 +157,6 @@
         (th) => (th.innerText ?? th.textContent ?? '').trim().toLowerCase()
       )
 
-      // Look for the items table — must have "product" and "quantity" columns
       const productIdx = headers.findIndex((h) => h.includes('product'))
       const qtyIdx = headers.findIndex((h) => h.includes('quantity'))
       if (productIdx < 0 || qtyIdx < 0) continue
@@ -168,11 +172,8 @@
         const productCell = cells[productIdx]
         const productText = (productCell?.innerText ?? productCell?.textContent ?? '').trim()
 
-        // Extract item number from "Item #: XXXXX" pattern
         const itemMatch = productText.match(/item\s*#\s*:\s*(\d+)/i)
         const itemNumber = itemMatch ? itemMatch[1] : null
-
-        // Product name is the first line (before "Item #:")
         const productName = productText.split(/\n/)[0]?.trim() ?? productText
 
         const qty = qtyIdx >= 0 ? Number((cells[qtyIdx]?.textContent ?? '').trim()) || 0 : 0
@@ -187,39 +188,43 @@
       if (lines.length > 0) break
     }
 
-    // Also extract order-level info from the detail page
     const pageText = document.body.innerText ?? ''
     const statusMatch = pageText.match(/Order\s+Status\s+(\w+)/i)
     const orderStatus = statusMatch ? statusMatch[1] : null
-
-    // Try to get order number from breadcrumb or heading
     const orderNumMatch = pageText.match(/(?:Order\s*#?\s*|order\s+number\s*:?\s*)(\d{6,})/i)
     const orderNumber = orderNumMatch ? orderNumMatch[1] : null
 
-    return { orderNumber, orderStatus, lines }
+    return lines.length > 0 ? { orderNumber, orderStatus, lines } : null
   }
 
   // ─── Store and relay ──────────────────────────────────────────────────────
 
+  function storeAndRelay(orders) {
+    const data = { orders, scrapedAt: Date.now() }
+    chrome.storage.local.set({ orderHistory: data }, () => {
+      if (DEBUG) console.log(`[Milk Manager Order Scraper] Saved ${orders.length} orders`)
+    })
+    chrome.runtime.sendMessage({ type: 'ORDER_HISTORY_UPDATE', payload: data })
+  }
+
   async function scrapeAndStore() {
-    if (isOrderListPage) {
-      const orders = scrapeOrderListTable()
-      if (orders.length === 0) {
-        if (DEBUG) console.log('[Milk Manager Order Scraper] No orders found on list page')
-        return
-      }
+    // Strategy 0: Fetch via API (works from any Lactalis page)
+    const apiOrders = await fetchOrderHistoryAPI()
+    if (apiOrders && apiOrders.length > 0) {
+      storeAndRelay(apiOrders)
+      return
+    }
 
-      const data = { orders, scrapedAt: Date.now() }
-      chrome.storage.local.set({ orderHistory: data }, () => {
-        if (DEBUG) console.log(`[Milk Manager Order Scraper] Saved ${orders.length} orders`)
-      })
-      chrome.runtime.sendMessage({ type: 'ORDER_HISTORY_UPDATE', payload: data })
+    // Strategy 1: DOM scraping (fallback when on the actual order page)
+    const domOrders = scrapeLivePage()
+    if (domOrders && domOrders.length > 0) {
+      storeAndRelay(domOrders)
+      return
+    }
 
-    } else if (isOrderDetailPage) {
-      const detail = scrapeOrderDetailLines()
-      if (detail.lines.length === 0) return
-
-      // Merge line items into existing orderHistory
+    // Detail page: scrape line items and merge into existing history
+    const detail = scrapeOrderDetailLines()
+    if (detail) {
       chrome.storage.local.get('orderHistory', (result) => {
         const history = result.orderHistory ?? { orders: [], scrapedAt: Date.now() }
 
@@ -247,17 +252,19 @@
         chrome.runtime.sendMessage({ type: 'ORDER_HISTORY_UPDATE', payload: history })
       })
     }
+
+    if (DEBUG) console.log('[Milk Manager Order Scraper] No order data found')
   }
 
   // ─── Run ──────────────────────────────────────────────────────────────────
 
-  // Delay to allow page to finish rendering
-  setTimeout(scrapeAndStore, 1500)
+  // Delay to let page render + avoid racing with scheduleScraper
+  setTimeout(scrapeAndStore, 2000)
 
-  // Re-run on significant DOM changes (SPA navigation, table re-render)
+  // Re-run on significant DOM changes (SPA navigation)
   let mutationDebounce = null
   let mutationReRunCount = 0
-  const MAX_RERUNS = 3
+  const MAX_RERUNS = 2
 
   const observer = new MutationObserver(() => {
     if (mutationReRunCount >= MAX_RERUNS) {
@@ -269,11 +276,11 @@
       mutationReRunCount++
       scrapeAndStore()
       if (mutationReRunCount >= MAX_RERUNS) observer.disconnect()
-    }, 3000)
+    }, 5000)
   })
   observer.observe(document.body, { childList: true, subtree: false })
 
-  // On-demand refresh from popup/background
+  // On-demand refresh
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.type === 'SCRAPE_ORDER_HISTORY') {
       scrapeAndStore().then(() => sendResponse({ ok: true }))
