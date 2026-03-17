@@ -37,7 +37,7 @@ import {
 import { db } from '../lib/db'
 import { generateForecasts, getSettings, type Forecast } from '../lib/forecastEngine'
 import { analyzeHistory } from '../lib/historyAnalyzer'
-import { AVG_DELIVERY_COST, nextDeliveryDate, friendlyError } from '../lib/constants'
+import { AVG_DELIVERY_COST, DELIVERY_DAYS, nextDeliveryDate, friendlyError } from '../lib/constants'
 import { getExtensionStatus, triggerScheduleRefresh, fetchCloudSchedule } from '../lib/extensionSync'
 import type { Order } from '../lib/types'
 
@@ -174,7 +174,21 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
         .where('status')
         .equals('upcoming')
         .sortBy('deliveryDate')
-        .then((slots) => slots[0] ?? null),
+        .then((slots) => {
+          const now = Date.now()
+          return slots.find((s) => {
+            const co = new Date(`${s.orderCutoffDate}T${s.orderCutoffTime}`)
+            if (!isNaN(co.getTime()) && co.getTime() < now) return false
+            if (isNaN(co.getTime())) {
+              const [y, m, d] = s.deliveryDate.split('-').map(Number)
+              const fb = new Date(y!, m! - 1, d!)
+              fb.setDate(fb.getDate() - 1)
+              fb.setHours(17, 0, 0, 0)
+              if (fb.getTime() < now) return false
+            }
+            return true
+          }) ?? null
+        }),
     [],
   )
 
@@ -263,9 +277,28 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
   // ── Next delivery display ──────────────────────────────────────────────────
 
   const slotDelivery = nextSlot ? new Date(nextSlot.deliveryDate) : null
-  const deliveryDate = slotDelivery && isValidDate(slotDelivery)
+  let deliveryDate = slotDelivery && isValidDate(slotDelivery)
     ? slotDelivery
     : nextDeliveryDate()
+
+  // If using fallback and today's cutoff (17:00 day before) has passed, advance
+  if (!nextSlot) {
+    const fbCutoff = new Date(deliveryDate)
+    fbCutoff.setDate(fbCutoff.getDate() - 1)
+    fbCutoff.setHours(17, 0, 0, 0)
+    if (fbCutoff.getTime() < Date.now()) {
+      const today = new Date()
+      const base = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+      for (let offset = 1; offset <= 7; offset++) {
+        const candidate = new Date(base)
+        candidate.setDate(base.getDate() + offset)
+        if (DELIVERY_DAYS.includes(candidate.getDay())) {
+          deliveryDate = candidate
+          break
+        }
+      }
+    }
+  }
 
   const slotCutoff = nextSlot
     ? new Date(`${nextSlot.orderCutoffDate}T${nextSlot.orderCutoffTime}`)
@@ -280,13 +313,12 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
         return d
       })()
 
-  const { label: deliveryLabel, urgent: deliveryUrgent } = formatCountdown(deliveryDate)
+  const { label: deliveryLabel } = formatCountdown(deliveryDate)
 
   const hoursToClose = Math.max(
     0,
     Math.round((cutoffDate.getTime() - Date.now()) / 3600000),
   )
-  const cutoffPassed = cutoffDate.getTime() < Date.now()
 
   // ── Weekly spend avg (last 8 weeks) ───────────────────────────────────────
 
@@ -323,26 +355,22 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
     <div className="flex-1 overflow-auto pb-4">
 
       {/* ── Next delivery card ─────────────────────────────────────────────── */}
-      <div className={`mx-3 mt-3 rounded-xl p-4 ${deliveryUrgent ? 'bg-amber-50 border border-amber-100' : 'bg-blue-50 border border-blue-100'}`}>
+      <div className="mx-3 mt-3 rounded-xl p-4 bg-blue-50 border border-blue-100">
         <div className="flex items-start justify-between">
           <div>
             <div className="flex items-center gap-2">
               <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Next Delivery</p>
             </div>
-            <p className={`text-xl font-bold mt-0.5 ${deliveryUrgent ? 'text-amber-700' : 'text-blue-700'}`}>
+            <p className="text-xl font-bold mt-0.5 text-blue-700">
               {deliveryLabel}
             </p>
-            {!cutoffPassed ? (
-              <p className="text-xs text-gray-500 mt-1 flex items-center gap-1">
-                <Clock size={11} />
-                Order cutoff in {hoursToClose}h
-              </p>
-            ) : (
-              <p className="text-xs text-red-500 mt-1">Cutoff passed</p>
-            )}
+            <p className="text-xs text-gray-500 mt-1 flex items-center gap-1">
+              <Clock size={11} />
+              Order cutoff in {hoursToClose}h
+            </p>
           </div>
-          <div className={`p-2.5 rounded-xl ${deliveryUrgent ? 'bg-amber-100' : 'bg-blue-100'}`}>
-            <Package size={22} className={deliveryUrgent ? 'text-amber-600' : 'text-blue-600'} />
+          <div className="p-2.5 rounded-xl bg-blue-100">
+            <Package size={22} className="text-blue-600" />
           </div>
         </div>
 
@@ -375,9 +403,7 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
         {/* Quick action */}
         <button
           onClick={onNavigateToOrder}
-          className={`mt-3 w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold ${
-            deliveryUrgent ? 'bg-amber-500 text-white' : 'bg-blue-600 text-white'
-          }`}
+          className="mt-3 w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold bg-blue-600 text-white"
         >
           <ShoppingCart size={15} />
           Build Next Order
