@@ -8,10 +8,11 @@
  */
 
 import { db } from './db'
-import type { DeliverySlot } from './types'
+import type { DeliverySlot, Order } from './types'
 
-const STATUS_KEY   = 'milk-manager-status-updates'
-const SCHEDULE_KEY = 'milk-manager-schedule-from-extension'
+const STATUS_KEY        = 'milk-manager-status-updates'
+const SCHEDULE_KEY      = 'milk-manager-schedule-from-extension'
+const ORDER_HISTORY_KEY = 'milk-manager-order-history'
 
 interface StatusUpdate {
   orderId:     number
@@ -234,4 +235,130 @@ export async function pollOrderStatus(): Promise<{
   } catch {
     return null
   }
+}
+
+// ─── Order history sync (scraped portal orders → IndexedDB) ─────────────
+
+interface ScrapedOrder {
+  orderNumber: string
+  createdAt: string | null
+  deliveryDate: string | null
+  orderStatus: string | null
+  refNumber: string | null
+  totalQty: number
+  total: number
+  onlineOrder: boolean | null
+  lineItems?: Array<{
+    itemNumber: string | null
+    productName: string
+    qty: number
+    price: number
+    lineTotal: number
+  }>
+}
+
+function mapPortalStatus(status: string | null): Order['status'] {
+  if (!status) return 'submitted'
+  const s = status.toLowerCase()
+  if (s === 'delivered' || s === 'closed' || s === 'complete') return 'delivered'
+  if (s === 'cancelled' || s === 'canceled') return 'cancelled'
+  // "Created", "Open", "Processing", "Shipped" etc. → submitted
+  return 'submitted'
+}
+
+/**
+ * Reads scraped order history from localStorage, upserts into IndexedDB.
+ * - Matches existing PWA orders by lactalisOrderNumber
+ * - Creates new Order records for portal-only orders (portalSource: true)
+ * Returns the number of orders upserted.
+ */
+export async function applyOrderHistory(): Promise<number> {
+  const raw = localStorage.getItem(ORDER_HISTORY_KEY)
+  if (!raw) return 0
+
+  let data: { orders: ScrapedOrder[]; scrapedAt: number }
+  try {
+    data = JSON.parse(raw)
+  } catch {
+    return 0
+  }
+
+  if (!data.orders || !Array.isArray(data.orders) || data.orders.length === 0) return 0
+
+  // Get all existing orders for matching
+  const existingOrders = await db.orders.toArray()
+
+  let upserted = 0
+
+  for (const scraped of data.orders) {
+    if (!scraped.orderNumber) continue
+
+    // Try to match by lactalisOrderNumber
+    const existing = existingOrders.find(
+      (o) => o.lactalisOrderNumber === scraped.orderNumber,
+    )
+
+    if (existing) {
+      // Update portal fields on existing PWA order
+      const updates: Partial<Order> = {
+        portalStatus: scraped.orderStatus ?? undefined,
+        portalRefNumber: scraped.refNumber ?? undefined,
+      }
+      // If portal says delivered but PWA still says submitted, update status
+      if (
+        existing.status === 'submitted' &&
+        mapPortalStatus(scraped.orderStatus) === 'delivered'
+      ) {
+        updates.status = 'delivered'
+      }
+      await db.orders.update(existing.id!, updates)
+      upserted++
+    } else {
+      // Create new portal-sourced order
+      const newOrder: Omit<Order, 'id'> = {
+        deliveryDate: scraped.deliveryDate ?? '',
+        createdAt: scraped.createdAt ? new Date(scraped.createdAt) : new Date(),
+        submittedAt: scraped.createdAt ? new Date(scraped.createdAt) : new Date(),
+        status: mapPortalStatus(scraped.orderStatus),
+        totalCostEstimate: scraped.total,
+        lactalisOrderNumber: scraped.orderNumber,
+        portalSource: true,
+        portalStatus: scraped.orderStatus ?? undefined,
+        portalRefNumber: scraped.refNumber ?? undefined,
+      }
+      const orderId = await db.orders.add(newOrder)
+
+      // If line items are available, create OrderLine records
+      if (scraped.lineItems && scraped.lineItems.length > 0) {
+        // Try to match item numbers to products in the DB
+        const products = await db.products.toArray()
+        const productMap = new Map(products.map((p) => [p.itemNumber, p]))
+
+        const orderLines = scraped.lineItems
+          .filter((li) => li.itemNumber)
+          .map((li) => {
+            const product = productMap.get(li.itemNumber!)
+            return {
+              orderId: orderId as number,
+              productId: product?.id ?? 0,
+              itemNumber: li.itemNumber!,
+              productName: li.productName ?? product?.name ?? '',
+              suggestedQty: 0,
+              approvedQty: li.qty,
+              unitPrice: li.price,
+              lineTotal: li.lineTotal || li.qty * li.price,
+            }
+          })
+
+        if (orderLines.length > 0) {
+          await db.orderLines.bulkAdd(orderLines)
+        }
+      }
+
+      upserted++
+    }
+  }
+
+  localStorage.removeItem(ORDER_HISTORY_KEY)
+  return upserted
 }
