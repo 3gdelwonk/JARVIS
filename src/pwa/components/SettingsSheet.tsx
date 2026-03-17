@@ -63,33 +63,37 @@ export default function SettingsSheet({ onClose }: Props) {
 
     // Check extension
     const ext = await getExtensionStatus()
-    log.push(ext.connected ? 'Extension: connected' : 'Extension: not connected')
+    const hasWorkerUrl = !!localStorage.getItem('milk-manager-worker-url')?.trim()
     setExtConnected(ext.connected)
 
-    // If extension is connected, trigger a fresh scrape first
     if (ext.connected) {
+      log.push('Extension: connected')
       log.push('Triggering extension to scrape orders + schedule...')
       triggerOrderHistoryRefresh()
       triggerScheduleRefresh()
-      // Wait a few seconds for the scraper to run and bridge to relay
       await new Promise((r) => setTimeout(r, 4000))
       log.push('Waited 4s for scraper to complete')
+    } else if (hasWorkerUrl) {
+      log.push('Extension: not connected — using cloud relay')
+    } else {
+      log.push('Extension: not connected')
     }
 
-    // Check localStorage keys
-    const hasOrderHistory = !!localStorage.getItem('milk-manager-order-history')
-    const hasSchedule = !!localStorage.getItem('milk-manager-schedule-from-extension')
-    log.push(`localStorage order-history: ${hasOrderHistory ? 'present' : 'empty'}`)
-    log.push(`localStorage schedule: ${hasSchedule ? 'present' : 'empty'}`)
+    // Bridge sync (only useful when extension is connected)
+    if (ext.connected) {
+      const hasOrderHistory = !!localStorage.getItem('milk-manager-order-history')
+      const hasSchedule = !!localStorage.getItem('milk-manager-schedule-from-extension')
+      log.push(`localStorage order-history: ${hasOrderHistory ? 'present' : 'empty'}`)
+      log.push(`localStorage schedule: ${hasSchedule ? 'present' : 'empty'}`)
 
-    // Try bridge sync
-    const bridgeOrders = await applyOrderHistory().catch(() => 0)
-    log.push(`Bridge sync: ${bridgeOrders} orders applied`)
+      const bridgeOrders = await applyOrderHistory().catch(() => 0)
+      log.push(`Bridge sync: ${bridgeOrders} orders applied`)
 
-    const bridgeSlots = await applyExtensionSchedule().catch(() => 0)
-    log.push(`Bridge schedule: ${bridgeSlots} slots applied`)
+      const bridgeSlots = await applyExtensionSchedule().catch(() => 0)
+      log.push(`Bridge schedule: ${bridgeSlots} slots applied`)
+    }
 
-    // Try cloud sync
+    // Cloud sync (works with or without extension)
     const cloudOrders = await fetchCloudOrderHistory().catch(() => 0)
     log.push(`Cloud orders: ${cloudOrders} applied`)
 
@@ -500,8 +504,8 @@ export default function SettingsSheet({ onClose }: Props) {
             <div className="text-[11px] text-gray-500 space-y-1 mb-2">
               <div className="flex justify-between">
                 <span>Extension</span>
-                <span className={extConnected === null ? 'text-gray-300' : extConnected ? 'text-green-600 font-medium' : 'text-red-500 font-medium'}>
-                  {extConnected === null ? '...' : extConnected ? 'Connected' : 'Not connected'}
+                <span className={extConnected === null ? 'text-gray-300' : extConnected ? 'text-green-600 font-medium' : (workerUrl.trim() ? 'text-blue-500 font-medium' : 'text-red-500 font-medium')}>
+                  {extConnected === null ? '...' : extConnected ? 'Connected' : (workerUrl.trim() ? 'Cloud relay' : 'Not connected')}
                 </span>
               </div>
               <div className="flex justify-between">

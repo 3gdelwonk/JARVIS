@@ -179,6 +179,7 @@
   async function fetchOrderGridAPI() {
     // OroCommerce uses datagrid endpoints for AJAX table loading
     const gridNames = [
+      'frontend-orders-grid-alternative',   // primary — from real portal URL params
       'frontend-customer-user-orders-grid',
       'customer-orders-grid',
       'order-grid',
@@ -218,18 +219,22 @@
         console.log(`${LOG} Datagrid ${gridName}: ${rows.length} rows, first row keys:`, Object.keys(rows[0]))
 
         // Map datagrid fields to our order format
+        // Primary field names from frontend-orders-grid-alternative URL params:
+        //   identifier, createdAt, statusName, poNumber, deliveryDate,
+        //   erpOrderStatus, erp_number, onlineOrder, totalQuantity, total
         const orders = rows.map((r) => {
-          // Try common OroCommerce field names
           const orderNumber = r.identifier || r.orderNumber || r.poNumber || r.id || r.order_number || ''
           return {
             orderNumber: String(orderNumber),
             createdAt: r.createdAt || r.created_at || r.dateOrdered || r.date_ordered || null,
             deliveryDate: r.deliveryDate || r.delivery_date || r.shipDate || r.ship_date || null,
-            orderStatus: r.internalStatusName || r.statusLabel || r.status || r.internal_status_name || null,
-            refNumber: r.customerNotes || r.poNumber || r.po_number || r.referenceNumber || null,
+            orderStatus: r.statusName || r.internalStatusName || r.statusLabel || r.status || r.internal_status_name || null,
+            portalStatus: r.erpOrderStatus || null,
+            refNumber: r.erp_number || r.customerNotes || r.po_number || r.referenceNumber || null,
+            poNumber: r.poNumber || r.po_number || null,
             totalQty: Number(r.totalQuantity || r.total_quantity || 0) || 0,
             total: parseFloat(String(r.total || r.grandTotal || r.subtotal || r.totalValue || 0).replace(/[$,AUD\s]/g, '')) || 0,
-            onlineOrder: r.isOnline ?? r.is_online ?? null,
+            onlineOrder: r.onlineOrder ?? r.isOnline ?? r.is_online ?? null,
           }
         }).filter((o) => o.orderNumber && /\d/.test(o.orderNumber))
 
