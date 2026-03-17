@@ -17,7 +17,7 @@ import {
   type ForecastSettings,
 } from '../lib/forecastEngine'
 import { exportAllData, downloadBackup, importAllData } from '../lib/dataExport'
-import { applyOrderHistory, applyExtensionSchedule, fetchCloudOrderHistory, fetchCloudSchedule, getExtensionStatus } from '../lib/extensionSync'
+import { applyOrderHistory, applyExtensionSchedule, fetchCloudOrderHistory, fetchCloudSchedule, getExtensionStatus, triggerOrderHistoryRefresh, triggerScheduleRefresh } from '../lib/extensionSync'
 import { db } from '../lib/db'
 
 interface Props {
@@ -65,6 +65,16 @@ export default function SettingsSheet({ onClose }: Props) {
     const ext = await getExtensionStatus()
     log.push(ext.connected ? 'Extension: connected' : 'Extension: not connected')
     setExtConnected(ext.connected)
+
+    // If extension is connected, trigger a fresh scrape first
+    if (ext.connected) {
+      log.push('Triggering extension to scrape orders + schedule...')
+      triggerOrderHistoryRefresh()
+      triggerScheduleRefresh()
+      // Wait a few seconds for the scraper to run and bridge to relay
+      await new Promise((r) => setTimeout(r, 4000))
+      log.push('Waited 4s for scraper to complete')
+    }
 
     // Check localStorage keys
     const hasOrderHistory = !!localStorage.getItem('milk-manager-order-history')

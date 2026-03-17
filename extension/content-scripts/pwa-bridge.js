@@ -119,6 +119,15 @@ window.addEventListener('milk-manager-refresh-schedule', () => {
   })
 })
 
+// ─── Order history refresh trigger ────────────────────────────────────────────
+
+window.addEventListener('milk-manager-refresh-orders', () => {
+  chrome.runtime.sendMessage({ type: 'TRIGGER_ORDER_HISTORY_REFRESH' }, (response) => {
+    if (chrome.runtime.lastError) return
+    console.log('[Milk Manager Bridge] Order history refresh triggered:', response?.ok)
+  })
+})
+
 // ─── Order submit trigger ─────────────────────────────────────────────────────
 
 window.addEventListener('milk-manager-submit-order', () => {
