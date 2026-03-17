@@ -64,11 +64,9 @@ function formatCountdown(targetDate: Date): { label: string; urgent: boolean } {
     (targetDate.getTime() - today.getTime()) / 86400000,
   )
 
-  if (diffDays === 0) return { label: 'Today', urgent: true }
-  if (diffDays === 1) return { label: 'Tomorrow', urgent: true }
   return {
-    label: targetDate.toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'short' }),
-    urgent: false,
+    label: targetDate.toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long' }),
+    urgent: diffDays <= 1,
   }
 }
 
