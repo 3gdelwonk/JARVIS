@@ -403,7 +403,7 @@ export default function SettingsSheet({ onClose }: Props) {
                   const k = extSecret.trim()
                   if (!w || !k) return
                   const config = encodeURIComponent(JSON.stringify({ w, k }))
-                  const js = `javascript:void(function(){var s=document.createElement('script');s.src='https://3gdelwonk.github.io/iga-milk-manager/lactalis-bridge.js#${config}';document.head.appendChild(s)})()`
+                  const js = `javascript:void(function(){var s=document.createElement('script');s.src='https://3gdelwonk.github.io/JARVIS/lactalis-bridge.js#${config}';document.head.appendChild(s)})()`
                   await navigator.clipboard.writeText(js)
                   setBookmarkletCopied(true)
                   setTimeout(() => setBookmarkletCopied(false), 2000)
