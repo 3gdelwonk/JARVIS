@@ -150,6 +150,11 @@ export function triggerScheduleRefresh() {
   window.dispatchEvent(new CustomEvent('milk-manager-refresh-schedule'))
 }
 
+/** Ask the extension to re-scrape the Lactalis order history. */
+export function triggerOrderHistoryRefresh() {
+  window.dispatchEvent(new CustomEvent('milk-manager-refresh-orders'))
+}
+
 /** Ask the extension to open the Lactalis Quick Order page and auto-submit. */
 export function triggerOrderSubmit() {
   window.dispatchEvent(new CustomEvent('milk-manager-submit-order'))

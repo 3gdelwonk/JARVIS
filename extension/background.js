@@ -252,6 +252,23 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       })
       return true
 
+    // PWA requests a live order history re-scrape
+    case 'TRIGGER_ORDER_HISTORY_REFRESH':
+      chrome.storage.local.get('lactalisTab', (result) => {
+        if (result.lactalisTab?.tabId) {
+          chrome.tabs.sendMessage(result.lactalisTab.tabId, { type: 'SCRAPE_ORDER_HISTORY' }, () => {
+            if (chrome.runtime.lastError) {
+              // Tab gone — open portal so orderHistoryScraper auto-runs on load
+              chrome.tabs.create({ url: 'https://my.lactalis.com.au/customer/order/' })
+            }
+          })
+        } else {
+          chrome.tabs.create({ url: 'https://my.lactalis.com.au/customer/order/' })
+        }
+        sendResponse({ ok: true })
+      })
+      return true
+
     default:
       sendResponse({ ok: false, error: `Unknown message type: ${msg.type}` })
   }
