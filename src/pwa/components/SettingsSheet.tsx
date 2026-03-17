@@ -8,8 +8,8 @@
  *  - Global order multiplier (0.5–2.0, step 0.05)
  */
 
-import { useRef, useState } from 'react'
-import { Clipboard, Download, Upload, X, RotateCcw } from 'lucide-react'
+import { useRef, useState, useEffect } from 'react'
+import { Clipboard, Download, RefreshCw, Upload, X, RotateCcw } from 'lucide-react'
 import {
   getSettings,
   saveSettings,
@@ -17,6 +17,8 @@ import {
   type ForecastSettings,
 } from '../lib/forecastEngine'
 import { exportAllData, downloadBackup, importAllData } from '../lib/dataExport'
+import { applyOrderHistory, applyExtensionSchedule, fetchCloudOrderHistory, fetchCloudSchedule, getExtensionStatus } from '../lib/extensionSync'
+import { db } from '../lib/db'
 
 interface Props {
   onClose: () => void
@@ -41,6 +43,59 @@ export default function SettingsSheet({ onClose }: Props) {
   const [extSecret, setExtSecret] = useState(() => localStorage.getItem('milk-manager-ext-secret') ?? '')
   const [extSecretSaved, setExtSecretSaved] = useState(false)
   const [bookmarkletCopied, setBookmarkletCopied] = useState(false)
+
+  // Sync status
+  const [syncLog, setSyncLog] = useState<string[]>([])
+  const [syncing, setSyncing] = useState(false)
+  const [orderCount, setOrderCount] = useState<number | null>(null)
+  const [slotCount, setSlotCount] = useState<number | null>(null)
+  const [extConnected, setExtConnected] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    db.orders.count().then(setOrderCount)
+    db.deliverySlots.count().then(setSlotCount)
+    getExtensionStatus().then((s) => setExtConnected(s.connected))
+  }, [])
+
+  async function handleSyncNow() {
+    setSyncing(true)
+    const log: string[] = []
+
+    // Check extension
+    const ext = await getExtensionStatus()
+    log.push(ext.connected ? 'Extension: connected' : 'Extension: not connected')
+    setExtConnected(ext.connected)
+
+    // Check localStorage keys
+    const hasOrderHistory = !!localStorage.getItem('milk-manager-order-history')
+    const hasSchedule = !!localStorage.getItem('milk-manager-schedule-from-extension')
+    log.push(`localStorage order-history: ${hasOrderHistory ? 'present' : 'empty'}`)
+    log.push(`localStorage schedule: ${hasSchedule ? 'present' : 'empty'}`)
+
+    // Try bridge sync
+    const bridgeOrders = await applyOrderHistory().catch(() => 0)
+    log.push(`Bridge sync: ${bridgeOrders} orders applied`)
+
+    const bridgeSlots = await applyExtensionSchedule().catch(() => 0)
+    log.push(`Bridge schedule: ${bridgeSlots} slots applied`)
+
+    // Try cloud sync
+    const cloudOrders = await fetchCloudOrderHistory().catch(() => 0)
+    log.push(`Cloud orders: ${cloudOrders} applied`)
+
+    const cloudSlots = await fetchCloudSchedule().catch(() => 0)
+    log.push(`Cloud schedule: ${cloudSlots} applied`)
+
+    // Update counts
+    const oc = await db.orders.count()
+    const sc = await db.deliverySlots.count()
+    setOrderCount(oc)
+    setSlotCount(sc)
+    log.push(`DB totals: ${oc} orders, ${sc} delivery slots`)
+
+    setSyncLog(log)
+    setSyncing(false)
+  }
 
   async function handleBackup() {
     try {
@@ -427,6 +482,42 @@ export default function SettingsSheet({ onClose }: Props) {
                 <p>Then log into mylactalis.com.au and tap the bookmark to activate.</p>
               </div>
             </details>
+          </div>
+
+          {/* Sync Status */}
+          <div className="border-t border-gray-100 pt-4">
+            <p className="text-sm font-medium text-gray-700 mb-0.5">Sync Status</p>
+            <div className="text-[11px] text-gray-500 space-y-1 mb-2">
+              <div className="flex justify-between">
+                <span>Extension</span>
+                <span className={extConnected === null ? 'text-gray-300' : extConnected ? 'text-green-600 font-medium' : 'text-red-500 font-medium'}>
+                  {extConnected === null ? '...' : extConnected ? 'Connected' : 'Not connected'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>Orders in DB</span>
+                <span className="font-medium text-gray-700">{orderCount ?? '...'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Delivery Slots</span>
+                <span className="font-medium text-gray-700">{slotCount ?? '...'}</span>
+              </div>
+            </div>
+            <button
+              onClick={handleSyncNow}
+              disabled={syncing}
+              className="w-full flex items-center justify-center gap-1.5 py-2 border border-blue-200 bg-blue-50 text-blue-600 text-xs font-medium rounded-lg disabled:opacity-50"
+            >
+              <RefreshCw size={12} className={syncing ? 'animate-spin' : ''} />
+              {syncing ? 'Syncing...' : 'Sync Now'}
+            </button>
+            {syncLog.length > 0 && (
+              <div className="mt-2 bg-gray-50 rounded-lg p-2 max-h-32 overflow-auto">
+                {syncLog.map((line, i) => (
+                  <p key={i} className="text-[10px] text-gray-500 font-mono leading-relaxed">{line}</p>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Backup / Restore */}
