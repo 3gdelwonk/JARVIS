@@ -262,11 +262,21 @@ async function fetchImagesFromOpenFoodFacts(products: Product[]) {
         try {
           const imgRes = await fetch(imageUrl, { signal: AbortSignal.timeout(8000) })
           const blob = await imgRes.blob()
+          // Compress to 96x96 JPEG thumbnail to reduce IndexedDB storage
           const base64 = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader()
-            reader.onload = () => resolve(reader.result as string)
-            reader.onerror = reject
-            reader.readAsDataURL(blob)
+            const img = new Image()
+            img.crossOrigin = 'anonymous'
+            img.onload = () => {
+              const canvas = document.createElement('canvas')
+              canvas.width = 96
+              canvas.height = 96
+              const ctx = canvas.getContext('2d')!
+              ctx.drawImage(img, 0, 0, 96, 96)
+              resolve(canvas.toDataURL('image/jpeg', 0.7))
+              URL.revokeObjectURL(img.src)
+            }
+            img.onerror = reject
+            img.src = URL.createObjectURL(blob)
           })
           await db.products.update(p.id!, { imageUrl: base64 })
           matched++
@@ -285,6 +295,16 @@ export default function ProductList() {
   const [search, setSearch] = useState('')
   const [fetchingImages, setFetchingImages] = useState(false)
   const [fetchMsg, setFetchMsg] = useState('')
+
+  // Auto-recover missing images on mount (fallback to Open Food Facts)
+  useEffect(() => {
+    db.products
+      .filter((p) => p.active !== false && !p.imageUrl && !!p.barcode && p.barcode.length >= 8)
+      .toArray()
+      .then((missing) => {
+        if (missing.length > 0) fetchImagesFromOpenFoodFacts(missing)
+      })
+  }, [])
 
   async function handleFetchImages(products: Product[]) {
     setFetchingImages(true)

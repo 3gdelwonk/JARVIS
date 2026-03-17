@@ -13,6 +13,7 @@ import type {
   ClaimRecord,
 } from './types'
 import { SEED_PRODUCTS } from '../data/seedProducts'
+import { PRODUCT_IMAGE_MAP } from '../data/productImageMap'
 
 export class MilkManagerDB extends Dexie {
   products!: Table<Product>
@@ -102,9 +103,15 @@ export async function seedDatabase(): Promise<void> {
     metcashCostPrice: p.metcashCost > 0 ? p.metcashCost : undefined,
     sellPrice: p.sellPrice,
     orderFrequency: p.orderFrequency,
+    imageUrl: PRODUCT_IMAGE_MAP[p.itemNumber] || '',
     createdAt: new Date(),
     updatedAt: new Date(),
   }))
 
   await db.products.bulkAdd(products)
+
+  // Request persistent storage to prevent iOS Safari from evicting IndexedDB
+  if (navigator.storage?.persist) {
+    navigator.storage.persist()
+  }
 }
