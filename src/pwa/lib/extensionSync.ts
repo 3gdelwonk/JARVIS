@@ -237,6 +237,38 @@ export async function pollOrderStatus(): Promise<{
   }
 }
 
+/**
+ * Fetch order history from the Worker (cloud KV cache).
+ * Returns number of orders upserted, or 0 if unavailable.
+ */
+export async function fetchCloudOrderHistory(): Promise<number> {
+  const base = getWorkerUrl()
+  if (!base) {
+    console.log('[Milk Manager] No Worker URL configured — skipping cloud order history')
+    return 0
+  }
+
+  try {
+    const res = await fetch(`${base}/extension/order-history`)
+    if (!res.ok) {
+      console.log(`[Milk Manager] Cloud order history fetch failed: ${res.status}`)
+      return 0
+    }
+    const data = await res.json()
+
+    if (!data.orders || !Array.isArray(data.orders) || data.orders.length === 0) {
+      console.log('[Milk Manager] Cloud order history empty')
+      return 0
+    }
+
+    console.log(`[Milk Manager] Got ${data.orders.length} orders from cloud`)
+    return upsertOrderHistory(data.orders)
+  } catch (e) {
+    console.log('[Milk Manager] Cloud order history error:', e)
+    return 0
+  }
+}
+
 // ─── Order history sync (scraped portal orders → IndexedDB) ─────────────
 
 interface ScrapedOrder {
@@ -274,37 +306,48 @@ function mapPortalStatus(status: string | null): Order['status'] {
  */
 export async function applyOrderHistory(): Promise<number> {
   const raw = localStorage.getItem(ORDER_HISTORY_KEY)
-  if (!raw) return 0
+  if (!raw) {
+    console.log('[Milk Manager] No order history in localStorage')
+    return 0
+  }
 
   let data: { orders: ScrapedOrder[]; scrapedAt: number }
   try {
     data = JSON.parse(raw)
   } catch {
+    console.warn('[Milk Manager] Failed to parse order history from localStorage')
     return 0
   }
 
-  if (!data.orders || !Array.isArray(data.orders) || data.orders.length === 0) return 0
+  if (!data.orders || !Array.isArray(data.orders) || data.orders.length === 0) {
+    console.log('[Milk Manager] Order history empty or invalid')
+    return 0
+  }
 
-  // Get all existing orders for matching
+  console.log(`[Milk Manager] Applying ${data.orders.length} scraped orders from extension`)
+  const count = await upsertOrderHistory(data.orders)
+  console.log(`[Milk Manager] Upserted ${count} orders into IndexedDB`)
+  if (count > 0) localStorage.removeItem(ORDER_HISTORY_KEY)
+  return count
+}
+
+/** Shared upsert logic for order history — used by both localStorage bridge and cloud fetch. */
+async function upsertOrderHistory(scrapedOrders: ScrapedOrder[]): Promise<number> {
   const existingOrders = await db.orders.toArray()
-
   let upserted = 0
 
-  for (const scraped of data.orders) {
+  for (const scraped of scrapedOrders) {
     if (!scraped.orderNumber) continue
 
-    // Try to match by lactalisOrderNumber
     const existing = existingOrders.find(
       (o) => o.lactalisOrderNumber === scraped.orderNumber,
     )
 
     if (existing) {
-      // Update portal fields on existing PWA order
       const updates: Partial<Order> = {
         portalStatus: scraped.orderStatus ?? undefined,
         portalRefNumber: scraped.refNumber ?? undefined,
       }
-      // If portal says delivered but PWA still says submitted, update status
       if (
         existing.status === 'submitted' &&
         mapPortalStatus(scraped.orderStatus) === 'delivered'
@@ -314,7 +357,6 @@ export async function applyOrderHistory(): Promise<number> {
       await db.orders.update(existing.id!, updates)
       upserted++
     } else {
-      // Create new portal-sourced order
       const newOrder: Omit<Order, 'id'> = {
         deliveryDate: scraped.deliveryDate ?? '',
         createdAt: scraped.createdAt ? new Date(scraped.createdAt) : new Date(),
@@ -328,9 +370,7 @@ export async function applyOrderHistory(): Promise<number> {
       }
       const orderId = await db.orders.add(newOrder)
 
-      // If line items are available, create OrderLine records
       if (scraped.lineItems && scraped.lineItems.length > 0) {
-        // Try to match item numbers to products in the DB
         const products = await db.products.toArray()
         const productMap = new Map(products.map((p) => [p.itemNumber, p]))
 
@@ -359,6 +399,5 @@ export async function applyOrderHistory(): Promise<number> {
     }
   }
 
-  localStorage.removeItem(ORDER_HISTORY_KEY)
   return upserted
 }

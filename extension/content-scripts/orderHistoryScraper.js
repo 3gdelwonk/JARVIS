@@ -15,7 +15,7 @@
 ;(function () {
   'use strict'
 
-  const DEBUG = false
+  const DEBUG = true
 
   // Avoid double-injection
   if (window.__milkManagerOrderScraperActive__) return
@@ -115,22 +115,34 @@
 
   async function fetchOrderHistoryAPI() {
     try {
+      console.log('[Milk Manager Order Scraper] Fetching /customer/order/ ...')
       const resp = await fetch('/customer/order/', {
         credentials: 'include',
         headers: { 'Accept': 'text/html' },
       })
-      if (!resp.ok) return null
+      if (!resp.ok) {
+        console.log(`[Milk Manager Order Scraper] Fetch failed: ${resp.status}`)
+        return null
+      }
       const html = await resp.text()
+      console.log(`[Milk Manager Order Scraper] Got HTML: ${html.length} chars`)
 
       // Check for login redirect or Incapsula block
-      if (html.includes('login') && html.length < 2000) return null
-      if (html.includes('_Incapsula_') || html.includes('incap_ses')) return null
+      if (html.includes('login') && html.length < 2000) {
+        console.log('[Milk Manager Order Scraper] Blocked — login redirect detected')
+        return null
+      }
+      if (html.includes('_Incapsula_') || html.includes('incap_ses')) {
+        console.log('[Milk Manager Order Scraper] Blocked — Incapsula challenge detected')
+        return null
+      }
 
       const doc = new DOMParser().parseFromString(html, 'text/html')
       const orders = scrapeOrderListFromDoc(doc)
+      console.log(`[Milk Manager Order Scraper] Parsed ${orders.length} orders from fetched HTML`)
       return orders.length > 0 ? orders : null
     } catch (e) {
-      if (DEBUG) console.log('[Milk Manager Order Scraper] Fetch API failed:', e.message)
+      console.log('[Milk Manager Order Scraper] Fetch API failed:', e.message)
       return null
     }
   }
@@ -202,9 +214,15 @@
   function storeAndRelay(orders) {
     const data = { orders, scrapedAt: Date.now() }
     chrome.storage.local.set({ orderHistory: data }, () => {
-      if (DEBUG) console.log(`[Milk Manager Order Scraper] Saved ${orders.length} orders`)
+      console.log(`[Milk Manager Order Scraper] Saved ${orders.length} orders to chrome.storage`)
     })
-    chrome.runtime.sendMessage({ type: 'ORDER_HISTORY_UPDATE', payload: data })
+    chrome.runtime.sendMessage({ type: 'ORDER_HISTORY_UPDATE', payload: data }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.warn('[Milk Manager Order Scraper] sendMessage failed:', chrome.runtime.lastError.message)
+      } else {
+        console.log('[Milk Manager Order Scraper] Background acknowledged:', response?.ok)
+      }
+    })
   }
 
   async function scrapeAndStore() {
