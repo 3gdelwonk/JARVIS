@@ -472,7 +472,9 @@ function ExportView({ orderId, onBack, onReceive }: ExportViewProps) {
   const activeLines = lines.filter((l) => l.approvedQty > 0)
   const pasteStr = buildPasteString(lines)
   const csvStr = buildCsvString(lines)
-  const totalCost = Math.round(activeLines.reduce((s, l) => s + l.lineTotal, 0) * 100) / 100
+  const linesTotalCost = Math.round(activeLines.reduce((s, l) => s + l.lineTotal, 0) * 100) / 100
+  const totalCost = linesTotalCost > 0 ? linesTotalCost : order.totalCostEstimate
+  const hasLines = activeLines.length > 0
   const dateStr = new Date(order.createdAt).toLocaleDateString('en-AU', {
     weekday: 'long', day: 'numeric', month: 'long',
   })
@@ -680,8 +682,8 @@ function ExportView({ orderId, onBack, onReceive }: ExportViewProps) {
           </div>
         </div>
 
-        {/* Export actions */}
-        <div className="px-3 py-4 space-y-3 border-b border-gray-100">
+        {/* Export actions — only show when there are lines to export */}
+        {hasLines && <div className="px-3 py-4 space-y-3 border-b border-gray-100">
           <p className="text-[11px] text-gray-400 font-medium uppercase tracking-wide">Export for Lactalis Portal</p>
 
           {/* Paste string */}
@@ -803,7 +805,7 @@ function ExportView({ orderId, onBack, onReceive }: ExportViewProps) {
             </span>
             <span className="text-[10px] opacity-60 mt-0.5">Desktop + Chrome extension required</span>
           </button>
-        </div>
+        </div>}
 
         {/* Status actions */}
         {(order.status === 'approved' || order.status === 'submitted') && (
@@ -833,23 +835,34 @@ function ExportView({ orderId, onBack, onReceive }: ExportViewProps) {
           <p className="text-[11px] text-gray-400 font-medium uppercase tracking-wide mb-2">
             Order Lines ({activeLines.length})
           </p>
-          {activeLines.map((line) => (
+          {hasLines ? activeLines.map((line) => (
             <div key={line.id} className="flex items-center justify-between py-1.5 border-b border-gray-50 last:border-0">
               <div className="flex-1 min-w-0">
                 <p className="text-sm text-gray-800 truncate">{line.productName}</p>
                 <p className="text-[11px] text-gray-400">#{line.itemNumber} · ${line.unitPrice.toFixed(2)}/unit</p>
               </div>
               <div className="text-right shrink-0 ml-3">
-                <p className="text-sm font-semibold text-gray-900">×{line.approvedQty}</p>
+                <p className="text-sm font-semibold text-gray-900">x{line.approvedQty}</p>
                 <p className="text-[11px] text-gray-500">${line.lineTotal.toFixed(2)}</p>
               </div>
             </div>
-          ))}
+          )) : (
+            <div className="py-6 text-center">
+              <p className="text-xs text-gray-400">Line item details not available</p>
+              <p className="text-[10px] text-gray-300 mt-1">
+                {order.portalSource
+                  ? 'Visit this order on the Lactalis portal to sync line items'
+                  : 'No items in this order'}
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Total */}
         <div className="px-3 py-3 border-t border-gray-100 flex justify-between items-center">
-          <span className="text-sm font-medium text-gray-600">Estimated Total</span>
+          <span className="text-sm font-medium text-gray-600">
+            {hasLines ? 'Estimated Total' : 'Portal Total'}
+          </span>
           <span className="text-base font-bold text-gray-900">${totalCost.toFixed(2)}</span>
         </div>
       </div>
