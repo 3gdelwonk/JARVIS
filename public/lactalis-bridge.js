@@ -7,7 +7,7 @@
  *
  * Usage: injected via bookmarklet:
  *   javascript:void(function(){var s=document.createElement('script');
- *   s.src='https://3gdelwonk.github.io/iga-milk-manager/lactalis-bridge.js#'
+ *   s.src='https://3gdelwonk.github.io/JARVIS/lactalis-bridge.js#'
  *   +encodeURIComponent(JSON.stringify({w:'WORKER_URL',k:'SECRET'}));
  *   document.head.appendChild(s)})()
  */
