@@ -21,19 +21,39 @@
 
   let CONFIG = null
 
-  try {
-    const scripts = document.querySelectorAll('script[src*="lactalis-bridge"]')
-    for (const s of scripts) {
-      const hash = new URL(s.src).hash.slice(1)
-      if (hash) {
-        CONFIG = JSON.parse(decodeURIComponent(hash))
-        break
+  // Method 1: global variable (set by bookmarklet before loading this script)
+  if (window.__LACTALIS_BRIDGE_CONFIG__) {
+    CONFIG = window.__LACTALIS_BRIDGE_CONFIG__
+  }
+
+  // Method 2: script tag hash fragment (fallback)
+  if (!CONFIG) {
+    try {
+      // Try document.currentScript first (most reliable during execution)
+      const current = document.currentScript
+      if (current && current.src) {
+        const hash = new URL(current.src).hash.slice(1)
+        if (hash) CONFIG = JSON.parse(decodeURIComponent(hash))
       }
-    }
-  } catch { /* ignore */ }
+    } catch { /* ignore */ }
+  }
+
+  if (!CONFIG) {
+    try {
+      const scripts = document.querySelectorAll('script[src*="lactalis-bridge"]')
+      for (const s of scripts) {
+        const hash = new URL(s.src).hash.slice(1)
+        if (hash) {
+          CONFIG = JSON.parse(decodeURIComponent(hash))
+          break
+        }
+      }
+    } catch { /* ignore */ }
+  }
 
   if (!CONFIG || !CONFIG.w || !CONFIG.k) {
-    console.error('[Lactalis Bridge] Missing config — bookmarklet URL must include Worker URL and secret in hash')
+    alert('[Milk Manager] Bridge config not found — re-copy the bookmarklet from Settings.')
+    console.error('[Lactalis Bridge] Missing config — no global var or script hash found')
     return
   }
 

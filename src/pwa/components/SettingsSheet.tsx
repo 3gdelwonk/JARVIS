@@ -402,8 +402,8 @@ export default function SettingsSheet({ onClose }: Props) {
                   const w = workerUrl.trim() || localStorage.getItem('milk-manager-worker-url') || ''
                   const k = extSecret.trim()
                   if (!w || !k) return
-                  const config = encodeURIComponent(JSON.stringify({ w, k }))
-                  const js = `javascript:void(function(){var s=document.createElement('script');s.src='https://3gdelwonk.github.io/JARVIS/lactalis-bridge.js#${config}';document.head.appendChild(s)})()`
+                  const configStr = JSON.stringify({ w, k }).replace(/'/g, "\\'")
+                  const js = `javascript:void(function(){window.__LACTALIS_BRIDGE_CONFIG__=${configStr};var s=document.createElement('script');s.src='https://3gdelwonk.github.io/JARVIS/lactalis-bridge.js';document.head.appendChild(s)})()`
                   await navigator.clipboard.writeText(js)
                   setBookmarkletCopied(true)
                   setTimeout(() => setBookmarkletCopied(false), 2000)
