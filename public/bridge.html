@@ -35,7 +35,7 @@
     color: #374151;
     margin-bottom: 8px;
   }
-  .section-desc { font-size: 13px; color: #6b7280; line-height: 1.5; }
+  .section-desc { font-size: 13px; color: #6b7280; line-height: 1.5; margin-bottom: 8px; }
   input[type="text"], input[type="password"] {
     width: 100%;
     border: 1px solid #d1d5db;
@@ -63,6 +63,8 @@
   .btn-primary { background: #1d4ed8; color: #fff; }
   .btn-primary:disabled { opacity: 0.4; }
   .btn-copy { background: #059669; color: #fff; }
+  .btn-test { background: #7c3aed; color: #fff; }
+  .btn-orange { background: #ea580c; color: #fff; }
   .toast {
     font-size: 13px;
     margin-top: 8px;
@@ -72,6 +74,7 @@
   }
   .toast.success { display: block; background: #f0fdf4; color: #166534; }
   .toast.error { display: block; background: #fef2f2; color: #991b1b; }
+  .toast.info { display: block; background: #eff6ff; color: #1e40af; }
   .code-box {
     background: #1f2937;
     color: #e5e7eb;
@@ -98,6 +101,20 @@
   }
   .divider { height: 1px; background: #e5e7eb; margin: 16px 0; }
   .small { font-size: 12px; color: #9ca3af; text-align: center; margin-top: 12px; line-height: 1.5; }
+  .tag { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 6px; }
+  .tag-green { background: #dcfce7; color: #166534; }
+  .tag-blue { background: #dbeafe; color: #1e40af; }
+  .tag-red { background: #fee2e2; color: #991b1b; }
+  .warn-box {
+    background: #fffbeb;
+    border: 1px solid #fcd34d;
+    border-radius: 10px;
+    padding: 12px;
+    font-size: 13px;
+    color: #92400e;
+    margin-top: 10px;
+    line-height: 1.5;
+  }
 </style>
 </head>
 <body>
@@ -107,45 +124,73 @@
 
   <!-- Step 1: Config -->
   <div class="section">
-    <div class="section-title">1. Configure (once)</div>
+    <div class="section-title">1. Configure <span class="tag tag-green">once</span></div>
     <input type="text" id="worker-url" placeholder="https://your-worker.workers.dev" />
     <input type="password" id="secret" placeholder="Extension secret" />
     <button class="btn btn-save" id="save-btn">Save</button>
     <div class="toast" id="save-toast"></div>
   </div>
 
-  <!-- Step 2: Setup Shortcut -->
+  <!-- Step 2: Diagnostic test -->
   <div class="section">
-    <div class="section-title">2. Create iOS Shortcut (once)</div>
-    <p class="section-desc">This generates the JavaScript code for your Shortcut. Tap "Copy Code", then follow the steps below.</p>
-    <button class="btn btn-copy" id="copy-code-btn" disabled>Copy Shortcut Code</button>
-    <div class="toast" id="copy-toast"></div>
-
+    <div class="section-title">2. Test Shortcuts <span class="tag tag-blue">once</span></div>
+    <p class="section-desc">First let's confirm iOS Shortcuts can run JavaScript on the Lactalis page. This takes 2 minutes.</p>
+    <button class="btn btn-test" id="copy-test-btn">Copy Test Code</button>
+    <div class="toast" id="test-toast"></div>
     <div class="divider"></div>
     <ol>
-      <li>Open the <strong>Shortcuts</strong> app</li>
-      <li>Tap <strong>+</strong> to create a new shortcut</li>
-      <li>Tap <strong>Add Action</strong>, search for <strong>"Run JavaScript on Web Page"</strong></li>
-      <li>Tap the default code and <strong>Select All → Paste</strong> (the code you just copied)</li>
-      <li>Tap the shortcut name at top, rename to <strong>"Milk Bridge"</strong></li>
-      <li>Tap the <strong>(i)</strong> button → enable <strong>"Show in Share Sheet"</strong></li>
-      <li>Under "Share Sheet Types" keep only <strong>Safari web pages</strong></li>
+      <li>Open <strong>Shortcuts</strong> app</li>
+      <li>Tap <strong>+</strong> → <strong>Add Action</strong></li>
+      <li>Search <strong>"Run JavaScript on Web Page"</strong> and add it</li>
+      <li>Tap the code area, <strong>Select All → Paste</strong></li>
+      <li>Add a <strong>second action</strong>: search for <strong>"Show Alert"</strong> and add it</li>
+      <li>In the Show Alert box, tap <strong>"Result"</strong> placeholder (it should already say "Shortcut Input" — tap it and change to <strong>"Run JavaScript on Web Page"</strong>)</li>
+      <li>Tap shortcut name → rename to <strong>"Bridge Test"</strong></li>
       <li>Tap <strong>Done</strong></li>
+      <li>Open <strong>mylactalis.com.au</strong> in Safari</li>
+      <li>Tap <strong>Share</strong> (box with arrow) → scroll down → tap <strong>"Bridge Test"</strong></li>
     </ol>
+    <div class="warn-box">
+      You should see an <strong>alert popup</strong> showing the page title and cookie status.
+      If nothing happens, Shortcuts may not work on your iOS version — skip to Step 4 (Alternative).
+    </div>
   </div>
 
-  <!-- Step 3: Use it -->
+  <!-- Step 3: Full sync shortcut -->
   <div class="section">
-    <div class="section-title">3. Use it</div>
+    <div class="section-title">3. Create Sync Shortcut <span class="tag tag-green">once</span></div>
+    <p class="section-desc">If the test worked, create the real shortcut. This one syncs the schedule and checks for pending orders — no widget needed, just tap and go.</p>
+    <button class="btn btn-copy" id="copy-code-btn" disabled>Copy Sync Code</button>
+    <div class="toast" id="copy-toast"></div>
+    <div class="divider"></div>
     <ol>
-      <li>Open <strong>mylactalis.com.au</strong> in Safari and log in</li>
-      <li>Tap the <strong>Share</strong> button (box with arrow)</li>
-      <li>Scroll down and tap <strong>"Milk Bridge"</strong></li>
-      <li>The floating widget appears — it auto-syncs the schedule</li>
+      <li>Open <strong>Shortcuts</strong> app</li>
+      <li>Tap <strong>+</strong> → <strong>Add Action</strong> → <strong>"Run JavaScript on Web Page"</strong></li>
+      <li>Tap the code, <strong>Select All → Paste</strong></li>
+      <li>Add second action: <strong>"Show Alert"</strong> (shows results)</li>
+      <li>In Show Alert, set input to <strong>"Run JavaScript on Web Page"</strong> result</li>
+      <li>Rename to <strong>"Milk Bridge"</strong></li>
+      <li>Tap <strong>(i)</strong> → enable <strong>"Show in Share Sheet"</strong></li>
+      <li>Tap <strong>Done</strong></li>
     </ol>
-    <a href="https://my.lactalis.com.au" target="_blank" class="btn btn-primary" style="text-decoration:none; text-align:center; display:block; margin-top:10px;">
-      Open Lactalis
-    </a>
+    <p class="section-desc" style="margin-top:12px; margin-bottom:0;"><strong>To use:</strong> Open Lactalis in Safari → Share → Milk Bridge. An alert shows the sync result.</p>
+  </div>
+
+  <!-- Step 4: Alternative if Shortcuts fails -->
+  <div class="section">
+    <div class="section-title">4. Alternative: Userscripts App <span class="tag tag-red">if shortcuts fail</span></div>
+    <p class="section-desc">If Shortcuts doesn't work, install the free <strong>Userscripts</strong> Safari extension from the App Store. It reliably injects JavaScript into any page.</p>
+    <ol>
+      <li>Install <a href="https://apps.apple.com/app/userscripts/id1463298887" target="_blank" style="color:#1d4ed8; text-decoration:underline;">Userscripts</a> from the App Store</li>
+      <li>Open <strong>Settings → Safari → Extensions → Userscripts</strong> → enable it</li>
+      <li>Allow it for <strong>mylactalis.com.au</strong></li>
+      <li>Open Userscripts app, tap <strong>+</strong> to create a new script</li>
+      <li>Set <strong>@match</strong> to <code>https://*.lactalis.com.au/*</code></li>
+      <li>Tap <strong>"Copy Userscript Code"</strong> below and paste it in</li>
+      <li>Save — the bridge now runs automatically on every Lactalis page load</li>
+    </ol>
+    <button class="btn btn-orange" id="copy-userscript-btn" disabled>Copy Userscript Code</button>
+    <div class="toast" id="userscript-toast"></div>
   </div>
 
   <!-- Code preview -->
@@ -155,59 +200,216 @@
   </details>
 
   <p class="small">
-    Tip: Add this page to your Home Screen for quick access.<br>
+    Add this page to your Home Screen for quick access.<br>
     Share → Add to Home Screen
   </p>
 </div>
 
 <script>
-  const STORAGE_KEY = 'milk-bridge-config'
+  var STORAGE_KEY = 'milk-bridge-config'
 
-  const workerInput = document.getElementById('worker-url')
-  const secretInput = document.getElementById('secret')
-  const saveBtn = document.getElementById('save-btn')
-  const saveToast = document.getElementById('save-toast')
-  const copyBtn = document.getElementById('copy-code-btn')
-  const copyToast = document.getElementById('copy-toast')
-  const codePreview = document.getElementById('code-preview')
+  var workerInput = document.getElementById('worker-url')
+  var secretInput = document.getElementById('secret')
+  var saveBtn = document.getElementById('save-btn')
+  var saveToast = document.getElementById('save-toast')
+  var copyTestBtn = document.getElementById('copy-test-btn')
+  var testToast = document.getElementById('test-toast')
+  var copyBtn = document.getElementById('copy-code-btn')
+  var copyToast = document.getElementById('copy-toast')
+  var copyUserscriptBtn = document.getElementById('copy-userscript-btn')
+  var userscriptToast = document.getElementById('userscript-toast')
+  var codePreview = document.getElementById('code-preview')
 
   // Load saved config
   try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY))
+    var saved = JSON.parse(localStorage.getItem(STORAGE_KEY))
     if (saved) {
       workerInput.value = saved.w || ''
       secretInput.value = saved.k || ''
-      updateCode(saved)
+      copyBtn.disabled = false
+      copyUserscriptBtn.disabled = false
+      updatePreview(saved)
     }
-  } catch {}
+  } catch(e) {}
 
-  function generateCode(config) {
-    // iOS Shortcuts "Run JavaScript on Web Page" runs in an isolated context.
-    // We inject config via an inline <script> tag so it lands in the PAGE's
-    // main world where the bridge script will execute.
-    var configJson = JSON.stringify(config)
-    return `// Inject config into the page's main world via inline script tag
-var configTag = document.createElement('script');
-configTag.textContent = 'window.__LACTALIS_BRIDGE_CONFIG__=' + ${JSON.stringify(configJson)} + ';';
-document.head.appendChild(configTag);
+  // ─── Test code: minimal diagnostic ─────────────────────────────────────────
 
-// Remove old bridge if re-running
-var old = document.getElementById('__lactalis-bridge-host__');
-if (old) old.remove();
+  var TEST_CODE = [
+    'var result = {};',
+    'result.title = document.title;',
+    'result.url = location.href;',
+    'result.hasCookies = document.cookie.length > 0;',
+    'result.cookieCount = document.cookie.split(";").filter(function(c){return c.trim();}).length;',
+    'result.hasCSRF = !!document.querySelector("input[name*=token]");',
+    'result.isLoggedIn = !location.href.includes("/login");',
+    'result.timestamp = new Date().toLocaleTimeString();',
+    'completion(JSON.stringify(result, null, 2));',
+  ].join('\n')
 
-// Load bridge script (runs in page's main world, can read the config)
-var s = document.createElement('script');
-s.src = 'https://3gdelwonk.github.io/JARVIS/lactalis-bridge.js?t=' + Date.now();
-s.onload = function() { completion(true); };
-s.onerror = function() { completion({"error": "Failed to load bridge script"}); };
-document.head.appendChild(s);`
+  // ─── Full sync code: self-contained, no external scripts ──────────────────
+
+  function generateSyncCode(config) {
+    return [
+      '// Milk Manager Bridge — Self-contained schedule sync',
+      '// Runs entirely within Shortcuts context. No external scripts.',
+      '',
+      'var WORKER = ' + JSON.stringify(config.w.replace(/\/+$/, '')) + ';',
+      'var SECRET = ' + JSON.stringify(config.k) + ';',
+      'var SLOT_ID = 869;',
+      'var log = [];',
+      '',
+      'function utcToMelbourne(utcStr) {',
+      '  var d = new Date(utcStr);',
+      '  return {',
+      '    date: d.toLocaleDateString("en-CA", { timeZone: "Australia/Melbourne" }),',
+      '    time: d.toLocaleTimeString("en-GB", { timeZone: "Australia/Melbourne", hour: "2-digit", minute: "2-digit", hour12: false })',
+      '  };',
+      '}',
+      '',
+      'function prevBizDay(ds) {',
+      '  var p = ds.split("-").map(Number);',
+      '  var dt = new Date(p[0], p[1]-1, p[2]);',
+      '  dt.setDate(dt.getDate() - 1);',
+      '  if (dt.getDay() === 0) dt.setDate(dt.getDate() - 2);',
+      '  if (dt.getDay() === 6) dt.setDate(dt.getDate() - 1);',
+      '  return dt.toISOString().slice(0, 10);',
+      '}',
+      '',
+      'async function syncSchedule() {',
+      '  try {',
+      '    var resp = await fetch("/delivery-slots/get-slots/" + SLOT_ID + "?preselectCurrentSlot=1", {',
+      '      credentials: "include",',
+      '      headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" }',
+      '    });',
+      '    if (!resp.ok) { log.push("Schedule fetch: HTTP " + resp.status); return; }',
+      '    var ct = resp.headers.get("Content-Type") || "";',
+      '    if (!ct.includes("json")) {',
+      '      var txt = await resp.text();',
+      '      if (txt.includes("/login")) { log.push("SESSION EXPIRED — log in again"); return; }',
+      '      log.push("Not JSON response — maybe not logged in"); return;',
+      '    }',
+      '    var data = await resp.json();',
+      '    if (!Array.isArray(data)) { log.push("Unexpected format"); return; }',
+      '    var slots = [];',
+      '    for (var i = 0; i < data.length; i++) {',
+      '      var day = data[i];',
+      '      var ts = null;',
+      '      if (day.time_slots) {',
+      '        for (var j = 0; j < day.time_slots.length; j++) {',
+      '          if (day.time_slots[j].status === 1 || day.time_slots[j].status === 2) { ts = day.time_slots[j]; break; }',
+      '        }',
+      '      }',
+      '      if (!ts) continue;',
+      '      var coDate = prevBizDay(day.date), coTime = "23:59";',
+      '      if (ts.cutoff) { var m = utcToMelbourne(ts.cutoff); coDate = m.date; coTime = m.time; }',
+      '      slots.push({ deliveryDate: day.date, orderCutoffDate: coDate, orderCutoffTime: coTime });',
+      '    }',
+      '    var today = new Date().toISOString().slice(0, 10);',
+      '    var future = slots.filter(function(s) { return s.deliveryDate >= today; });',
+      '    future.sort(function(a, b) { return a.deliveryDate.localeCompare(b.deliveryDate); });',
+      '    if (future.length === 0) { log.push("No future delivery slots"); return; }',
+      '    var schedule = {',
+      '      nextDelivery: future[0],',
+      '      upcomingDeliveries: future.slice(0, 5),',
+      '      scrapedAt: Date.now(),',
+      '      source: "ios_shortcut"',
+      '    };',
+      '    var pushResp = await fetch(WORKER + "/extension/schedule", {',
+      '      method: "POST",',
+      '      headers: { "Authorization": "Bearer " + SECRET, "Content-Type": "application/json" },',
+      '      body: JSON.stringify(schedule)',
+      '    });',
+      '    if (pushResp.ok) {',
+      '      log.push("SCHEDULE SYNCED: " + future.length + " slots");',
+      '      log.push("Next delivery: " + future[0].deliveryDate);',
+      '      log.push("Cutoff: " + future[0].orderCutoffDate + " " + future[0].orderCutoffTime);',
+      '    } else {',
+      '      log.push("Worker push failed: " + pushResp.status);',
+      '    }',
+      '  } catch(e) { log.push("Schedule error: " + e.message); }',
+      '}',
+      '',
+      'async function checkOrder() {',
+      '  try {',
+      '    var resp = await fetch(WORKER + "/extension/pending-order", {',
+      '      headers: { "Authorization": "Bearer " + SECRET }',
+      '    });',
+      '    if (!resp.ok) { log.push("Order check: HTTP " + resp.status); return; }',
+      '    var data = await resp.json();',
+      '    if (!data.order || data.order.status !== "pending") {',
+      '      log.push("No pending orders");',
+      '      return;',
+      '    }',
+      '    var order = data.order;',
+      '    var count = order.lines.filter(function(l) { return l.qty > 0; }).length;',
+      '    log.push("PENDING ORDER: " + order.orderId + " (" + count + " items)");',
+      '    var csrf = document.querySelector(\'input[name="oro_product_quick_add[_token]"]\');',
+      '    if (!csrf) {',
+      '      log.push("Go to Quick Order page to submit");',
+      '      return;',
+      '    }',
+      '    var products = order.lines.filter(function(l) { return l.qty > 0; }).map(function(l, i) {',
+      '      return { sku: l.itemNumber, unit: "item", quantity: l.qty, index: i };',
+      '    });',
+      '    var fd = new FormData();',
+      '    fd.append("oro_product_quick_add[component]", "oro_shopping_list_to_checkout_quick_add_processor");',
+      '    fd.append("oro_product_quick_add[additional]", "");',
+      '    fd.append("oro_product_quick_add[transition]", "start_from_quickorderform");',
+      '    fd.append("oro_product_quick_add[_token]", csrf.value);',
+      '    fd.append("oro_product_quick_add[products]", JSON.stringify(products));',
+      '    var subResp = await fetch("/customer/product/quick-add/", {',
+      '      method: "POST", body: fd, credentials: "include", redirect: "manual"',
+      '    });',
+      '    var ok = subResp.ok || subResp.status === 302 || subResp.status === 301;',
+      '    await fetch(WORKER + "/extension/order-result", {',
+      '      method: "POST",',
+      '      headers: { "Authorization": "Bearer " + SECRET, "Content-Type": "application/json" },',
+      '      body: JSON.stringify({ orderId: order.orderId, success: ok })',
+      '    });',
+      '    log.push(ok ? "ORDER SUBMITTED" : "Submit failed: " + subResp.status);',
+      '  } catch(e) { log.push("Order error: " + e.message); }',
+      '}',
+      '',
+      '(async function() {',
+      '  log.push("Page: " + document.title);',
+      '  log.push("URL: " + location.href.split("?")[0]);',
+      '  log.push("---");',
+      '  await syncSchedule();',
+      '  await checkOrder();',
+      '  log.push("---");',
+      '  log.push("Done at " + new Date().toLocaleTimeString());',
+      '  completion(log.join("\\n"));',
+      '})()',
+    ].join('\n')
   }
 
-  function updateCode(config) {
-    const code = generateCode(config)
-    codePreview.textContent = code
-    copyBtn.disabled = false
+  // ─── Userscript code: wraps bridge with @match header ─────────────────────
+
+  function generateUserscriptCode(config) {
+    return [
+      '// ==UserScript==',
+      '// @name         Milk Manager Bridge',
+      '// @match        https://*.lactalis.com.au/*',
+      '// @grant        none',
+      '// @run-at       document-idle',
+      '// ==/UserScript==',
+      '',
+      'window.__LACTALIS_BRIDGE_CONFIG__ = ' + JSON.stringify(config) + ';',
+      '',
+      '(function() {',
+      '  if (document.getElementById("__lactalis-bridge-host__")) return;',
+      '  var s = document.createElement("script");',
+      '  s.src = "https://3gdelwonk.github.io/JARVIS/lactalis-bridge.js?t=" + Date.now();',
+      '  document.head.appendChild(s);',
+      '})()',
+    ].join('\n')
   }
+
+  function updatePreview(config) {
+    codePreview.textContent = generateSyncCode(config)
+  }
+
+  // ─── Event listeners ──────────────────────────────────────────────────────
 
   saveBtn.addEventListener('click', function() {
     var w = workerInput.value.trim()
@@ -219,31 +421,53 @@ document.head.appendChild(s);`
     }
     var config = { w: w, k: k }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(config))
-    updateCode(config)
+    copyBtn.disabled = false
+    copyUserscriptBtn.disabled = false
+    updatePreview(config)
     saveToast.textContent = 'Config saved'
     saveToast.className = 'toast success'
     setTimeout(function() { saveToast.className = 'toast' }, 2000)
   })
 
+  copyTestBtn.addEventListener('click', function() {
+    navigator.clipboard.writeText(TEST_CODE).then(function() {
+      testToast.textContent = 'Test code copied — now create the shortcut'
+      testToast.className = 'toast success'
+      setTimeout(function() { testToast.className = 'toast' }, 4000)
+    }).catch(function() {
+      testToast.textContent = 'Copy failed — long-press to select code below'
+      testToast.className = 'toast error'
+      codePreview.textContent = TEST_CODE
+    })
+  })
+
   copyBtn.addEventListener('click', function() {
     var saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null')
     if (!saved) return
-    var code = generateCode(saved)
-
+    var code = generateSyncCode(saved)
     navigator.clipboard.writeText(code).then(function() {
-      copyToast.textContent = 'Copied! Now open the Shortcuts app.'
+      copyToast.textContent = 'Sync code copied — create the shortcut'
       copyToast.className = 'toast success'
       setTimeout(function() { copyToast.className = 'toast' }, 4000)
     }).catch(function() {
-      // Fallback: select the code preview for manual copy
-      codePreview.scrollIntoView()
-      var range = document.createRange()
-      range.selectNodeContents(codePreview)
-      var sel = window.getSelection()
-      sel.removeAllRanges()
-      sel.addRange(range)
-      copyToast.textContent = 'Long-press the code above to copy it'
+      codePreview.textContent = code
+      copyToast.textContent = 'Copy failed — long-press code at bottom to select'
       copyToast.className = 'toast error'
+    })
+  })
+
+  copyUserscriptBtn.addEventListener('click', function() {
+    var saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null')
+    if (!saved) return
+    var code = generateUserscriptCode(saved)
+    navigator.clipboard.writeText(code).then(function() {
+      userscriptToast.textContent = 'Userscript code copied'
+      userscriptToast.className = 'toast success'
+      setTimeout(function() { userscriptToast.className = 'toast' }, 4000)
+    }).catch(function() {
+      codePreview.textContent = code
+      userscriptToast.textContent = 'Copy failed — long-press code at bottom to select'
+      userscriptToast.className = 'toast error'
     })
   })
 </script>
