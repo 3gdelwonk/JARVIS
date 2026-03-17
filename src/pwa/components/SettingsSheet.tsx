@@ -38,6 +38,9 @@ export default function SettingsSheet({ onClose }: Props) {
   const [storeInfoSaved, setStoreInfoSaved] = useState(false)
   const [workerUrl, setWorkerUrl] = useState(() => localStorage.getItem('milk-manager-worker-url') ?? '')
   const [workerUrlSaved, setWorkerUrlSaved] = useState(false)
+  const [extSecret, setExtSecret] = useState(() => localStorage.getItem('milk-manager-ext-secret') ?? '')
+  const [extSecretSaved, setExtSecretSaved] = useState(false)
+  const [bookmarkletCopied, setBookmarkletCopied] = useState(false)
 
   async function handleBackup() {
     try {
@@ -366,6 +369,64 @@ export default function SettingsSheet({ onClose }: Props) {
             >
               {workerUrlSaved ? 'Saved' : 'Save Worker URL'}
             </button>
+          </div>
+
+          {/* Lactalis Bookmarklet */}
+          <div className="border-t border-gray-100 pt-4">
+            <p className="text-sm font-medium text-gray-700 mb-0.5">Lactalis Bookmarklet</p>
+            <p className="text-[11px] text-gray-400 mb-2">
+              Sync schedules and submit orders from your phone browser — no extension needed.
+              Log into mylactalis.com.au on your phone, then tap the bookmarklet.
+            </p>
+            <input
+              type="password"
+              placeholder="Extension secret"
+              value={extSecret}
+              onChange={(e) => setExtSecret(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono mb-2"
+            />
+            <div className="flex gap-2 mb-2">
+              <button
+                onClick={() => {
+                  localStorage.setItem('milk-manager-ext-secret', extSecret.trim())
+                  setExtSecretSaved(true)
+                  setTimeout(() => setExtSecretSaved(false), 2000)
+                }}
+                disabled={!extSecret.trim()}
+                className="flex-1 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg disabled:opacity-40"
+              >
+                {extSecretSaved ? 'Saved' : 'Save Secret'}
+              </button>
+              <button
+                onClick={async () => {
+                  const w = workerUrl.trim() || localStorage.getItem('milk-manager-worker-url') || ''
+                  const k = extSecret.trim()
+                  if (!w || !k) return
+                  const config = encodeURIComponent(JSON.stringify({ w, k }))
+                  const js = `javascript:void(function(){var s=document.createElement('script');s.src='https://3gdelwonk.github.io/iga-milk-manager/lactalis-bridge.js#${config}';document.head.appendChild(s)})()`
+                  await navigator.clipboard.writeText(js)
+                  setBookmarkletCopied(true)
+                  setTimeout(() => setBookmarkletCopied(false), 2000)
+                }}
+                disabled={!workerUrl.trim() || !extSecret.trim()}
+                className="flex-1 py-2 border border-blue-300 text-blue-600 text-sm font-medium rounded-lg disabled:opacity-40"
+              >
+                {bookmarkletCopied ? 'Copied!' : 'Copy Bookmarklet'}
+              </button>
+            </div>
+            {(!workerUrl.trim() || !extSecret.trim()) && (
+              <p className="text-[11px] text-amber-600 mb-1">
+                Set both Worker URL (above) and Extension Secret to generate the bookmarklet.
+              </p>
+            )}
+            <details className="text-[11px] text-gray-400">
+              <summary className="cursor-pointer text-blue-500">Installation instructions</summary>
+              <div className="mt-1.5 space-y-1">
+                <p><strong>iOS Safari:</strong> Copy the bookmarklet, create any bookmark, edit it, and replace the URL with the copied text.</p>
+                <p><strong>Android Chrome:</strong> Copy the bookmarklet, add any page as a bookmark, edit the bookmark, and replace the URL with the copied text.</p>
+                <p>Then log into mylactalis.com.au and tap the bookmark to activate.</p>
+              </div>
+            </details>
           </div>
 
           {/* Backup / Restore */}

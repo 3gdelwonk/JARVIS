@@ -39,9 +39,24 @@ interface SessionData {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function corsHeaders(origin: string, env: Env): Record<string, string> {
-  const allowed = env.ALLOWED_ORIGIN || 'https://3gdelwonk.github.io'
+  const envAllowed = env.ALLOWED_ORIGIN || 'https://3gdelwonk.github.io'
+  if (envAllowed === '*') {
+    return {
+      'Access-Control-Allow-Origin': origin || '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Access-Control-Max-Age': '86400',
+    }
+  }
+  const allowList = new Set([
+    envAllowed,
+    'https://mylactalis.com.au',
+    'https://my.lactalis.com.au',
+    'https://www.mylactalis.com.au',
+  ])
+  const effectiveOrigin = allowList.has(origin) ? origin : envAllowed
   return {
-    'Access-Control-Allow-Origin': allowed === '*' ? (origin || '*') : allowed,
+    'Access-Control-Allow-Origin': effectiveOrigin,
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     'Access-Control-Max-Age': '86400',
