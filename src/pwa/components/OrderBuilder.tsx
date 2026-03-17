@@ -16,12 +16,15 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import {
   AlertTriangle,
   ArrowLeft,
+  Camera,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
   ClipboardCopy,
   Download,
   ExternalLink,
+  FileWarning,
+  Globe,
   ImageOff,
   Minus,
   Plus,
@@ -29,6 +32,7 @@ import {
   RotateCcw,
   ShoppingCart,
   Trash2,
+  X,
 } from 'lucide-react'
 import { generateForecasts, getSettings, type Forecast } from '../lib/forecastEngine'
 import { db } from '../lib/db'
@@ -243,22 +247,57 @@ const ForecastRow = memo(function ForecastRow({ forecast: f, qty, onChange, imag
   )
 })
 
-// ─── History view ─────────────────────────────────────────────────────────────
+// ─── History view (enhanced) ──────────────────────────────────────────────────
 
 interface HistoryViewProps {
   onBuild: () => void
   onViewOrder: (id: number) => void
 }
 
+type HistoryFilter = 'all' | 'submitted' | 'delivered' | 'draft'
+
 function HistoryView({ onBuild, onViewOrder }: HistoryViewProps) {
+  const [filter, setFilter] = useState<HistoryFilter>('all')
+  const [expandedId, setExpandedId] = useState<number | null>(null)
+
   const orders = useLiveQuery(
     () => db.orders.orderBy('createdAt').reverse().toArray(),
     [],
   )
 
+  // Preload line counts for all orders
+  const lineCounts = useLiveQuery(async () => {
+    if (!orders) return new Map<number, number>()
+    const counts = new Map<number, number>()
+    for (const o of orders) {
+      const c = await db.orderLines.where('orderId').equals(o.id!).count()
+      counts.set(o.id!, c)
+    }
+    return counts
+  }, [orders])
+
+  // Expanded order lines
+  const expandedLines = useLiveQuery(
+    () => expandedId ? db.orderLines.where('orderId').equals(expandedId).toArray() : [],
+    [expandedId],
+  )
+
+  const filtered = orders?.filter((o) => {
+    if (filter === 'all') return true
+    if (filter === 'submitted') return o.status === 'submitted' || o.status === 'approved'
+    return o.status === filter
+  })
+
+  const FILTER_OPTS: { id: HistoryFilter; label: string }[] = [
+    { id: 'all', label: 'All' },
+    { id: 'submitted', label: 'Active' },
+    { id: 'delivered', label: 'Delivered' },
+    { id: 'draft', label: 'Draft' },
+  ]
+
   return (
     <div className="flex flex-col h-full">
-      <div className="px-3 py-2 border-b border-gray-200 bg-white shrink-0">
+      <div className="px-3 py-2 border-b border-gray-200 bg-white shrink-0 space-y-2">
         <button
           onClick={onBuild}
           className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white font-semibold py-2.5 rounded-xl"
@@ -266,51 +305,134 @@ function HistoryView({ onBuild, onViewOrder }: HistoryViewProps) {
           <ShoppingCart size={16} />
           Build New Order
         </button>
+        {/* Filter pills */}
+        <div className="flex gap-1.5">
+          {FILTER_OPTS.map((f) => (
+            <button
+              key={f.id}
+              onClick={() => setFilter(f.id)}
+              className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${
+                filter === f.id
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-100 text-gray-500'
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="flex-1 overflow-auto">
-        {!orders || orders.length === 0 ? (
+        {!filtered || filtered.length === 0 ? (
           <div className="p-8 text-center">
             <ShoppingCart size={32} className="mx-auto text-gray-200 mb-3" />
-            <p className="text-sm text-gray-400">No orders yet</p>
+            <p className="text-sm text-gray-400">
+              {filter === 'all' ? 'No orders yet' : `No ${filter} orders`}
+            </p>
             <p className="text-xs text-gray-300 mt-1">Build your first order above</p>
           </div>
         ) : (
-          orders.map((order) => (
-            <div
-              key={order.id}
-              className="w-full px-3 py-3 border-b border-gray-100 flex items-center gap-3"
-            >
-              <button
-                onClick={() => onViewOrder(order.id!)}
-                className="flex-1 min-w-0 text-left active:bg-gray-50"
-              >
-                <p className="text-sm font-medium text-gray-900">
-                  {new Date(order.createdAt).toLocaleDateString('en-AU', {
-                    weekday: 'short', day: 'numeric', month: 'short',
-                  })}
-                </p>
-                <p className="text-xs text-gray-500 mt-0.5">
-                  ${order.totalCostEstimate.toFixed(2)} est.
-                </p>
-              </button>
-              <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${STATUS_BADGE[order.status]}`}>
-                {order.status}
-              </span>
-              <button
-                onClick={async (e) => {
-                  e.stopPropagation()
-                  if (!window.confirm('Delete this order?')) return
-                  await db.orderLines.where('orderId').equals(order.id!).delete()
-                  await db.orders.delete(order.id!)
-                }}
-                className="p-1.5 rounded-full hover:bg-red-50 text-gray-400 hover:text-red-500 shrink-0"
-                aria-label="Delete order"
-              >
-                <Trash2 size={14} />
-              </button>
-            </div>
-          ))
+          filtered.map((order) => {
+            const isExpanded = expandedId === order.id
+            const itemCount = lineCounts?.get(order.id!) ?? 0
+            const delivDate = order.deliveryDate
+              ? new Date(order.deliveryDate + 'T00:00:00').toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' })
+              : null
+
+            return (
+              <div key={order.id} className="border-b border-gray-100">
+                {/* Order card header */}
+                <div className="px-3 py-3 flex items-start gap-3">
+                  <button
+                    onClick={() => onViewOrder(order.id!)}
+                    className="flex-1 min-w-0 text-left active:bg-gray-50"
+                  >
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <p className="text-sm font-medium text-gray-900">
+                        {order.lactalisOrderNumber
+                          ? `#${order.lactalisOrderNumber}`
+                          : new Date(order.createdAt).toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' })}
+                      </p>
+                      {order.portalSource && (
+                        <span className="flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-600 font-medium">
+                          <Globe size={8} /> Portal
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 text-[11px] text-gray-500">
+                      {delivDate && <span>Delivery: {delivDate}</span>}
+                      {delivDate && itemCount > 0 && <span>·</span>}
+                      {itemCount > 0 && <span>{itemCount} items</span>}
+                      {order.totalCostEstimate > 0 && (
+                        <>
+                          <span>·</span>
+                          <span>${order.totalCostEstimate.toFixed(2)}</span>
+                        </>
+                      )}
+                    </div>
+                    {order.portalRefNumber && (
+                      <p className="text-[10px] text-gray-400 mt-0.5">Ref: {order.portalRefNumber}</p>
+                    )}
+                    {order.portalStatus && order.portalStatus !== order.status && (
+                      <p className="text-[10px] text-gray-400">Portal: {order.portalStatus}</p>
+                    )}
+                  </button>
+
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${STATUS_BADGE[order.status]}`}>
+                      {order.status}
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => setExpandedId(isExpanded ? null : order.id!)}
+                        className="p-1 rounded-full hover:bg-gray-100 text-gray-400"
+                        aria-label="Toggle details"
+                      >
+                        {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                      </button>
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation()
+                          if (!window.confirm('Delete this order?')) return
+                          await db.orderLines.where('orderId').equals(order.id!).delete()
+                          await db.orders.delete(order.id!)
+                        }}
+                        className="p-1 rounded-full hover:bg-red-50 text-gray-400 hover:text-red-500"
+                        aria-label="Delete order"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Expanded line items */}
+                {isExpanded && (
+                  <div className="px-3 pb-3">
+                    {(!expandedLines || expandedLines.length === 0) ? (
+                      <p className="text-[11px] text-gray-300 text-center py-2">No line items</p>
+                    ) : (
+                      <div className="bg-gray-50 rounded-lg overflow-hidden">
+                        {expandedLines.filter((l) => l.approvedQty > 0).map((line) => (
+                          <div key={line.id} className="flex items-center justify-between px-3 py-1.5 border-b border-gray-100 last:border-0">
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs text-gray-700 truncate">{line.productName}</p>
+                              <p className="text-[10px] text-gray-400">#{line.itemNumber}</p>
+                            </div>
+                            <div className="text-right shrink-0 ml-2">
+                              <p className="text-xs font-medium text-gray-800">x{line.approvedQty}</p>
+                              <p className="text-[10px] text-gray-400">${line.lineTotal.toFixed(2)}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })
         )}
       </div>
     </div>
@@ -899,7 +1021,7 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
   )
 }
 
-// ─── Receive view ─────────────────────────────────────────────────────────────
+// ─── Receive view (enhanced — discrepancy detection, claims, invoice photo) ──
 
 interface ReceiveViewProps {
   orderId: number
@@ -909,10 +1031,48 @@ interface ReceiveViewProps {
 interface ReceiveLine {
   lineId: number
   productId: number
+  itemNumber: string
   productName: string
   approvedQty: number
   receivedQty: number
   expiryDate: string
+}
+
+type ClaimType = 'damaged' | 'short_delivery' | 'wrong_product' | 'out_of_date'
+
+const CLAIM_TYPE_LABELS: Record<ClaimType, string> = {
+  damaged: 'Damaged in Transit',
+  short_delivery: 'Short Delivery',
+  wrong_product: 'Wrong Product Sent',
+  out_of_date: 'Out of Date / Short-Dated',
+}
+
+const CLAIM_TEMPLATES: Record<ClaimType, string> = {
+  damaged: 'Products arrived damaged and are not fit for sale. Please arrange credit or replacement.',
+  short_delivery: 'We ordered more units than were received. Please issue a credit for the shortage.',
+  wrong_product: 'The incorrect product was delivered. Please arrange collection and send the correct item.',
+  out_of_date: 'Products arrived already expired or with insufficient shelf life for retail sale.',
+}
+
+function compressPhoto(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      const MAX = 640
+      let w = img.width, h = img.height
+      if (w > MAX || h > MAX) {
+        if (w > h) { h = Math.round(h * MAX / w); w = MAX }
+        else { w = Math.round(w * MAX / h); h = MAX }
+      }
+      canvas.width = w; canvas.height = h
+      canvas.getContext('2d')!.drawImage(img, 0, 0, w, h)
+      resolve(canvas.toDataURL('image/jpeg', 0.7))
+      URL.revokeObjectURL(img.src)
+    }
+    img.onerror = reject
+    img.src = URL.createObjectURL(file)
+  })
 }
 
 function ReceiveView({ orderId, onBack }: ReceiveViewProps) {
@@ -922,6 +1082,20 @@ function ReceiveView({ orderId, onBack }: ReceiveViewProps) {
   const [done, setDone] = useState(false)
   const [receiveError, setReceiveError] = useState<string | null>(null)
 
+  // Claim filing state
+  const [claimLineIdx, setClaimLineIdx] = useState<number | null>(null)
+  const [claimType, setClaimType] = useState<ClaimType>('short_delivery')
+  const [claimDesc, setClaimDesc] = useState('')
+  const [claimPhotoUrl, setClaimPhotoUrl] = useState('')
+  const [claimPhotoFile, setClaimPhotoFile] = useState<File | null>(null)
+  const claimFileRef = useRef<HTMLInputElement>(null)
+
+  // Invoice photo state
+  const [invoicePhotoUrl, setInvoicePhotoUrl] = useState('')
+  const [invoicePhotoFile, setInvoicePhotoFile] = useState<File | null>(null)
+  const invoiceFileRef = useRef<HTMLInputElement>(null)
+
+  const order = useLiveQuery(() => db.orders.get(orderId), [orderId])
   const orderLines = useLiveQuery(
     () => db.orderLines.where('orderId').equals(orderId).toArray(),
     [orderId],
@@ -936,6 +1110,7 @@ function ReceiveView({ orderId, onBack }: ReceiveViewProps) {
           .map((l) => ({
             lineId: l.id!,
             productId: l.productId,
+            itemNumber: l.itemNumber,
             productName: l.productName,
             approvedQty: l.approvedQty,
             receivedQty: l.approvedQty,
@@ -947,6 +1122,90 @@ function ReceiveView({ orderId, onBack }: ReceiveViewProps) {
 
   function updateLine(i: number, patch: Partial<ReceiveLine>) {
     setLines((prev) => prev.map((l, idx) => (idx === i ? { ...l, ...patch } : l)))
+  }
+
+  const discrepancies = lines.filter((l) => l.receivedQty !== l.approvedQty)
+  const hasDiscrepancies = discrepancies.length > 0
+
+  function openClaimForLine(idx: number) {
+    const line = lines[idx]
+    const isShort = line.receivedQty < line.approvedQty
+    const type: ClaimType = isShort ? 'short_delivery' : 'damaged'
+    setClaimLineIdx(idx)
+    setClaimType(type)
+    const shortInfo = isShort ? `Ordered ${line.approvedQty}, received ${line.receivedQty} (short ${line.approvedQty - line.receivedQty}).` : ''
+    setClaimDesc(`${shortInfo} ${CLAIM_TEMPLATES[type]}`.trim())
+    setClaimPhotoUrl('')
+    setClaimPhotoFile(null)
+  }
+
+  function closeClaim() {
+    setClaimLineIdx(null)
+    setClaimDesc('')
+    setClaimPhotoUrl('')
+    setClaimPhotoFile(null)
+  }
+
+  async function submitClaim() {
+    if (claimLineIdx === null) return
+    const line = lines[claimLineIdx]
+    const storeName = localStorage.getItem('milk-manager-store-name') || 'IGA Store'
+    const lactalisEmail = localStorage.getItem('milk-manager-lactalis-email') || 'customer.service@lactalis.com.au'
+    const today = new Date().toISOString().split('T')[0]
+    const qty = Math.abs(line.approvedQty - line.receivedQty) || 1
+
+    // Save claim record
+    const claimId = await db.claimRecords.add({
+      productId: line.productId,
+      productName: line.productName,
+      claimType,
+      quantity: qty,
+      orderId,
+      invoiceRef: order?.lactalisOrderNumber ?? undefined,
+      description: claimDesc,
+      emailSentAt: today,
+      createdAt: today,
+    }) as number
+
+    // Save claim photo if taken
+    if (claimPhotoFile) {
+      const base64 = await compressPhoto(claimPhotoFile)
+      await db.photoRecords.add({
+        orderId,
+        claimId,
+        productId: line.productId,
+        photoType: 'claim_evidence',
+        base64,
+        capturedAt: new Date().toISOString(),
+      })
+    }
+
+    // Open Gmail with pre-filled email
+    const subject = `Product Claim — ${CLAIM_TYPE_LABELS[claimType]} — ${line.productName} — ${today}`
+    const body = `Dear Lactalis Customer Service,
+
+Store: ${storeName}
+Date: ${today}
+Order: ${order?.lactalisOrderNumber || 'N/A'}
+
+Claim Type: ${CLAIM_TYPE_LABELS[claimType]}
+Product: ${line.productName} (#${line.itemNumber})
+Quantity: ${qty}
+
+Details:
+${claimDesc}
+
+Please arrange credit or replacement at your earliest convenience.
+
+Kind regards,
+${storeName}`.trim()
+
+    window.open(
+      `https://mail.google.com/mail/u/0/?view=cm&to=${encodeURIComponent(lactalisEmail)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,
+      '_blank',
+    )
+
+    closeClaim()
   }
 
   async function handleConfirm() {
@@ -968,6 +1227,19 @@ function ReceiveView({ orderId, onBack }: ReceiveViewProps) {
         }
         await db.orderLines.update(line.lineId, { deliveredQty: line.receivedQty })
       }
+
+      // Save invoice photo if taken
+      if (invoicePhotoFile) {
+        const base64 = await compressPhoto(invoicePhotoFile)
+        await db.photoRecords.add({
+          orderId,
+          photoType: 'invoice',
+          base64,
+          capturedAt: new Date().toISOString(),
+          notes: order?.lactalisOrderNumber ? `Order #${order.lactalisOrderNumber}` : undefined,
+        })
+      }
+
       await db.orders.update(orderId, { status: 'delivered' })
       setDone(true)
     } catch (e) {
@@ -984,10 +1256,114 @@ function ReceiveView({ orderId, onBack }: ReceiveViewProps) {
           <CheckCircle2 size={28} className="text-green-600" />
         </div>
         <p className="text-base font-semibold text-gray-900">Order received!</p>
-        <p className="text-sm text-gray-500">Expiry batches saved. Order marked as delivered.</p>
+        <p className="text-sm text-gray-500">
+          Expiry batches saved. Order marked as delivered.
+          {invoicePhotoFile && ' Invoice photo stored.'}
+        </p>
+        {hasDiscrepancies && (
+          <p className="text-xs text-amber-600">
+            {discrepancies.length} discrepanc{discrepancies.length === 1 ? 'y' : 'ies'} noted
+          </p>
+        )}
         <button onClick={onBack} className="mt-2 bg-blue-600 text-white text-sm font-medium px-6 py-2.5 rounded-xl">
           Done
         </button>
+      </div>
+    )
+  }
+
+  // Inline claim form modal
+  if (claimLineIdx !== null) {
+    const line = lines[claimLineIdx]
+    return (
+      <div className="flex flex-col h-full">
+        <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-200 bg-white shrink-0">
+          <button onClick={closeClaim} className="p-1.5 -ml-1 text-gray-500" aria-label="Back">
+            <ArrowLeft size={18} />
+          </button>
+          <div className="flex-1">
+            <p className="text-sm font-semibold text-gray-900">File Claim</p>
+            <p className="text-[11px] text-gray-400">{line.productName}</p>
+          </div>
+        </div>
+        <div className="flex-1 overflow-auto p-3 space-y-3">
+          <div className="bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
+            <p className="text-xs text-amber-700 font-medium">
+              Ordered x{line.approvedQty} · Received x{line.receivedQty}
+              {line.receivedQty < line.approvedQty && ` · Short x${line.approvedQty - line.receivedQty}`}
+              {line.receivedQty > line.approvedQty && ` · Extra x${line.receivedQty - line.approvedQty}`}
+            </p>
+          </div>
+
+          <div>
+            <label className="text-xs text-gray-500 mb-1 block">Claim Type</label>
+            <select
+              value={claimType}
+              onChange={(e) => {
+                const t = e.target.value as ClaimType
+                setClaimType(t)
+                setClaimDesc(CLAIM_TEMPLATES[t])
+              }}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700"
+            >
+              {(Object.entries(CLAIM_TYPE_LABELS) as [ClaimType, string][]).map(([k, v]) => (
+                <option key={k} value={k}>{v}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="text-xs text-gray-500 mb-1 block">Description</label>
+            <textarea
+              rows={3}
+              value={claimDesc}
+              onChange={(e) => setClaimDesc(e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm resize-none"
+            />
+          </div>
+
+          {/* Evidence photo */}
+          <input
+            ref={claimFileRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              if (!f) return
+              setClaimPhotoFile(f)
+              setClaimPhotoUrl(URL.createObjectURL(f))
+            }}
+          />
+          {!claimPhotoUrl ? (
+            <button
+              onClick={() => claimFileRef.current?.click()}
+              className="w-full h-16 rounded-xl border border-dashed border-gray-300 bg-gray-50 flex items-center justify-center gap-2 text-gray-400 text-xs"
+            >
+              <Camera size={16} /> Take Evidence Photo (optional)
+            </button>
+          ) : (
+            <div className="relative">
+              <img src={claimPhotoUrl} className="w-full rounded-xl object-contain max-h-32" alt="Claim evidence" />
+              <button
+                onClick={() => { setClaimPhotoFile(null); setClaimPhotoUrl('') }}
+                className="absolute top-1 right-1 bg-black/50 text-white rounded-full p-1"
+              >
+                <X size={12} />
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="shrink-0 px-3 py-3 border-t border-gray-100 bg-white">
+          <button
+            onClick={submitClaim}
+            className="w-full flex items-center justify-center gap-2 bg-red-600 text-white font-semibold py-2.5 rounded-xl"
+          >
+            <FileWarning size={16} /> Submit Claim & Open Email
+          </button>
+        </div>
       </div>
     )
   }
@@ -999,60 +1375,138 @@ function ReceiveView({ orderId, onBack }: ReceiveViewProps) {
           <ArrowLeft size={18} />
         </button>
         <div className="flex-1">
-          <p className="text-sm font-semibold text-gray-900">Receive Order</p>
-          <p className="text-[11px] text-gray-400">Enter received quantities and expiry dates</p>
+          <p className="text-sm font-semibold text-gray-900">Review Delivery</p>
+          <p className="text-[11px] text-gray-400">
+            {order?.lactalisOrderNumber ? `Order #${order.lactalisOrderNumber}` : 'Enter received quantities'}
+          </p>
         </div>
+        {hasDiscrepancies && (
+          <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">
+            {discrepancies.length} issue{discrepancies.length > 1 ? 's' : ''}
+          </span>
+        )}
       </div>
 
       <div className="flex-1 overflow-auto p-3 space-y-3">
+        {/* Invoice photo capture */}
+        <input
+          ref={invoiceFileRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0]
+            if (!f) return
+            setInvoicePhotoFile(f)
+            setInvoicePhotoUrl(URL.createObjectURL(f))
+          }}
+        />
+        {!invoicePhotoUrl ? (
+          <button
+            onClick={() => invoiceFileRef.current?.click()}
+            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-dashed border-blue-200 bg-blue-50 text-blue-600 text-xs font-medium"
+          >
+            <Camera size={14} /> Scan Invoice Photo
+          </button>
+        ) : (
+          <div className="relative">
+            <img src={invoicePhotoUrl} className="w-full rounded-xl object-contain max-h-24" alt="Invoice" />
+            <div className="absolute top-1 left-1 bg-blue-600 text-white text-[9px] px-1.5 py-0.5 rounded-full font-medium">
+              Invoice
+            </div>
+            <button
+              onClick={() => { setInvoicePhotoFile(null); setInvoicePhotoUrl('') }}
+              className="absolute top-1 right-1 bg-black/50 text-white rounded-full p-1"
+            >
+              <X size={12} />
+            </button>
+          </div>
+        )}
+
+        {/* Discrepancy summary banner */}
+        {hasDiscrepancies && (
+          <div className="bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
+            <p className="text-xs text-amber-700 font-medium">
+              {discrepancies.length} discrepanc{discrepancies.length === 1 ? 'y' : 'ies'} detected
+            </p>
+            <p className="text-[10px] text-amber-600 mt-0.5">
+              Tap "File Claim" on flagged items to send to Lactalis
+            </p>
+          </div>
+        )}
+
         {lines.length === 0 && (
           <p className="text-sm text-gray-400 text-center py-8">Loading order lines…</p>
         )}
-        {lines.map((line, i) => (
-          <div key={line.lineId} className="bg-white border border-gray-100 rounded-xl p-3">
-            <div className="mb-2">
-              <p className="text-sm font-medium text-gray-900">{line.productName}</p>
-              <p className="text-[11px] text-gray-400">Ordered: ×{line.approvedQty}</p>
-            </div>
-            <div className="flex items-center gap-3 mb-2">
-              <span className="text-xs text-gray-500 shrink-0">Received:</span>
-              <div className="flex items-center gap-1.5">
-                <button
-                  onClick={() => updateLine(i, { receivedQty: Math.max(0, line.receivedQty - 1) })}
-                  className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center text-gray-600"
-                >
-                  <Minus size={12} />
-                </button>
-                <span className="w-8 text-center text-sm font-semibold text-gray-900">{line.receivedQty}</span>
-                <button
-                  onClick={() => updateLine(i, { receivedQty: line.receivedQty + 1 })}
-                  className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center text-gray-600"
-                >
-                  <Plus size={12} />
-                </button>
+        {lines.map((line, i) => {
+          const isDiscrepant = line.receivedQty !== line.approvedQty
+          const isShort = line.receivedQty < line.approvedQty
+
+          return (
+            <div
+              key={line.lineId}
+              className={`bg-white border rounded-xl p-3 ${
+                isDiscrepant ? 'border-amber-200' : 'border-gray-100'
+              }`}
+            >
+              <div className="mb-2">
+                <p className="text-sm font-medium text-gray-900">{line.productName}</p>
+                <p className="text-[11px] text-gray-400">#{line.itemNumber} · Ordered: x{line.approvedQty}</p>
               </div>
-              {line.receivedQty !== line.approvedQty && (
-                <span className={`text-[11px] font-medium ${line.receivedQty < line.approvedQty ? 'text-amber-600' : 'text-blue-600'}`}>
-                  {line.receivedQty < line.approvedQty
-                    ? `Short ×${line.approvedQty - line.receivedQty}`
-                    : `Extra ×${line.receivedQty - line.approvedQty}`}
-                </span>
+              <div className="flex items-center gap-3 mb-2">
+                <span className="text-xs text-gray-500 shrink-0">Received:</span>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => updateLine(i, { receivedQty: Math.max(0, line.receivedQty - 1) })}
+                    className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center text-gray-600"
+                  >
+                    <Minus size={12} />
+                  </button>
+                  <span className={`w-8 text-center text-sm font-semibold ${
+                    isDiscrepant ? 'text-amber-600' : 'text-gray-900'
+                  }`}>
+                    {line.receivedQty}
+                  </span>
+                  <button
+                    onClick={() => updateLine(i, { receivedQty: line.receivedQty + 1 })}
+                    className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center text-gray-600"
+                  >
+                    <Plus size={12} />
+                  </button>
+                </div>
+                {isDiscrepant && (
+                  <span className={`text-[11px] font-medium ${isShort ? 'text-red-600' : 'text-blue-600'}`}>
+                    {isShort
+                      ? `Short x${line.approvedQty - line.receivedQty}`
+                      : `Extra x${line.receivedQty - line.approvedQty}`}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-500 shrink-0">Expiry:</span>
+                <input
+                  type="date"
+                  value={line.expiryDate}
+                  onChange={(e) => updateLine(i, { expiryDate: e.target.value })}
+                  className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1.5 text-gray-700"
+                />
+                {!line.expiryDate && (
+                  <span className="text-[10px] text-gray-300 shrink-0">optional</span>
+                )}
+              </div>
+              {/* Claim shortcut for discrepant items */}
+              {isDiscrepant && (
+                <button
+                  onClick={() => openClaimForLine(i)}
+                  className="mt-2 w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-red-50 text-red-600 text-xs font-medium border border-red-100"
+                >
+                  <FileWarning size={12} /> File Claim
+                </button>
               )}
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500 shrink-0">Expiry:</span>
-              <input
-                type="date"
-                value={line.expiryDate}
-                onChange={(e) => updateLine(i, { expiryDate: e.target.value })}
-                className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1.5 text-gray-700"
-              />
-              {!line.expiryDate && (
-                <span className="text-[10px] text-gray-300 shrink-0">optional</span>
-              )}
-            </div>
-          </div>
-        ))}
+          )
+        })}
         {receiveError && (
           <div className="bg-red-50 border border-red-100 rounded-xl px-3 py-2">
             <p className="text-xs text-red-600">{receiveError}</p>
@@ -1069,7 +1523,7 @@ function ReceiveView({ orderId, onBack }: ReceiveViewProps) {
           {confirming ? (
             <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Saving…</>
           ) : (
-            <><CheckCircle2 size={16} /> Confirm Receipt</>
+            <><CheckCircle2 size={16} /> Confirm Delivery</>
           )}
         </button>
       </div>

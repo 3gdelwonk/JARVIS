@@ -143,7 +143,19 @@ export interface ClaimRecord {
   claimType: "damaged" | "short_delivery" | "wrong_product" | "out_of_date";
   quantity: number;
   invoiceRef?: string;
+  orderId?: number;
   description: string;
   emailSentAt?: string;   // YYYY-MM-DD
   createdAt: string;      // YYYY-MM-DD
+}
+
+export interface PhotoRecord {
+  id?: number;
+  orderId?: number;
+  claimId?: number;
+  productId?: number;
+  photoType: "invoice" | "claim_evidence" | "delivery_receipt";
+  base64: string;
+  capturedAt: string;     // ISO datetime
+  notes?: string;
 }
