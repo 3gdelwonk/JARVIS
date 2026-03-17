@@ -597,6 +597,11 @@ function ExportView({ orderId, onBack, onReceive }: ExportViewProps) {
     }
   }
 
+  const delivDateStr = order.deliveryDate
+    ? new Date(order.deliveryDate + 'T00:00:00').toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
+    : null
+  const createdStr = new Date(order.createdAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+
   return (
     <div className="flex flex-col h-full">
       {/* Back bar */}
@@ -605,7 +610,9 @@ function ExportView({ orderId, onBack, onReceive }: ExportViewProps) {
           <ArrowLeft size={18} />
         </button>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-gray-900 truncate">{dateStr}</p>
+          <p className="text-sm font-semibold text-gray-900 truncate">
+            {order.lactalisOrderNumber ? `Order #${order.lactalisOrderNumber}` : dateStr}
+          </p>
           <p className="text-[11px] text-gray-400">
             {activeLines.length} items · ${totalCost.toFixed(2)}
           </p>
@@ -616,6 +623,62 @@ function ExportView({ orderId, onBack, onReceive }: ExportViewProps) {
       </div>
 
       <div className="flex-1 overflow-auto">
+
+        {/* Order summary card */}
+        <div className="px-3 py-3 border-b border-gray-100 bg-gray-50">
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+            {order.lactalisOrderNumber && (
+              <>
+                <span className="text-gray-400">Lactalis Order #</span>
+                <span className="text-gray-800 font-medium">{order.lactalisOrderNumber}</span>
+              </>
+            )}
+            {delivDateStr && (
+              <>
+                <span className="text-gray-400">Delivery Date</span>
+                <span className="text-gray-800">{delivDateStr}</span>
+              </>
+            )}
+            <span className="text-gray-400">Created</span>
+            <span className="text-gray-800">{createdStr}</span>
+            {order.submittedAt && (
+              <>
+                <span className="text-gray-400">Submitted</span>
+                <span className="text-gray-800">{new Date(order.submittedAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+              </>
+            )}
+            <span className="text-gray-400">Status</span>
+            <span className="text-gray-800 capitalize">{order.status}</span>
+            {order.portalStatus && order.portalStatus !== order.status && (
+              <>
+                <span className="text-gray-400">Portal Status</span>
+                <span className="text-gray-800">{order.portalStatus}</span>
+              </>
+            )}
+            {order.portalRefNumber && (
+              <>
+                <span className="text-gray-400">Ref Number</span>
+                <span className="text-gray-800">{order.portalRefNumber}</span>
+              </>
+            )}
+            {order.invoiceNumber && (
+              <>
+                <span className="text-gray-400">Invoice #</span>
+                <span className="text-gray-800">{order.invoiceNumber}</span>
+              </>
+            )}
+            <span className="text-gray-400">Items</span>
+            <span className="text-gray-800">{activeLines.length} products</span>
+            <span className="text-gray-400">Est. Total</span>
+            <span className="text-gray-800 font-semibold">${totalCost.toFixed(2)}</span>
+            {order.portalSource && (
+              <>
+                <span className="text-gray-400">Source</span>
+                <span className="text-indigo-600 font-medium">Lactalis Portal</span>
+              </>
+            )}
+          </div>
+        </div>
 
         {/* Export actions */}
         <div className="px-3 py-4 space-y-3 border-b border-gray-100">
