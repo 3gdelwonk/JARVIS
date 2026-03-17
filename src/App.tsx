@@ -1,7 +1,7 @@
 import { Component, useEffect, useState, type ReactNode } from 'react'
 import { Camera, LayoutDashboard, ShoppingCart, Package, Settings, Sparkles, Upload } from 'lucide-react'
 import { seedDatabase, backfillBakedImages } from './pwa/lib/db'
-import { applyStatusUpdates, applyExtensionSchedule, applyOrderHistory } from './pwa/lib/extensionSync'
+import { applyStatusUpdates, applyExtensionSchedule, applyOrderHistory, fetchCloudOrderHistory, fetchCloudSchedule } from './pwa/lib/extensionSync'
 import Dashboard from './pwa/components/Dashboard'
 import OrderBuilder from './pwa/components/OrderBuilder'
 import MarginAnalysis from './pwa/components/MarginAnalysis'
@@ -88,6 +88,9 @@ export default function App() {
         applyOrderHistory().catch(console.error),
       ])
       setReady(true)
+      // Also try cloud fallback (non-blocking — runs after UI is ready)
+      fetchCloudOrderHistory().catch(console.error)
+      fetchCloudSchedule().catch(console.error)
     })()
 
     const onStatusUpdate       = () => applyStatusUpdates().catch(console.error)
