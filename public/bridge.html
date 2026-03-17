@@ -182,14 +182,20 @@
   } catch {}
 
   function generateCode(config) {
-    // iOS Shortcuts "Run JavaScript on Web Page" requires calling completion()
-    return `var config = ${JSON.stringify(config)};
-window.__LACTALIS_BRIDGE_CONFIG__ = config;
+    // iOS Shortcuts "Run JavaScript on Web Page" runs in an isolated context.
+    // We inject config via an inline <script> tag so it lands in the PAGE's
+    // main world where the bridge script will execute.
+    var configJson = JSON.stringify(config)
+    return `// Inject config into the page's main world via inline script tag
+var configTag = document.createElement('script');
+configTag.textContent = 'window.__LACTALIS_BRIDGE_CONFIG__=' + ${JSON.stringify(configJson)} + ';';
+document.head.appendChild(configTag);
 
 // Remove old bridge if re-running
 var old = document.getElementById('__lactalis-bridge-host__');
 if (old) old.remove();
 
+// Load bridge script (runs in page's main world, can read the config)
 var s = document.createElement('script');
 s.src = 'https://3gdelwonk.github.io/JARVIS/lactalis-bridge.js?t=' + Date.now();
 s.onload = function() { completion(true); };
