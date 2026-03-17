@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { ChevronDown, ChevronUp, ExternalLink, ImageOff, RefreshCw, Search } from 'lucide-react'
-import { db } from '../lib/db'
+import { db, backfillBakedImages } from '../lib/db'
 import { PRODUCT_IMAGE_MAP } from '../data/productImageMap'
 import type { Product, StockSnapshot } from '../lib/types'
 
@@ -241,6 +241,8 @@ async function fetchImagesFromOpenFoodFacts(products: Product[]) {
   let skipped = 0
   for (const p of products) {
     if (!p.barcode || p.barcode.length < 8) continue
+    // Never overwrite baked-in Lactalis images
+    if (PRODUCT_IMAGE_MAP[p.itemNumber]) continue
     const url = `https://world.openfoodfacts.org/api/v0/product/${p.barcode}.json`
     let json: Record<string, unknown> | null = null
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -307,10 +309,18 @@ export default function ProductList() {
       })
   }, [])
 
+  async function handleResetImages() {
+    setFetchingImages(true)
+    setFetchMsg('')
+    await backfillBakedImages()
+    setFetchMsg('Images restored')
+    setFetchingImages(false)
+  }
+
   async function handleFetchImages(products: Product[]) {
     setFetchingImages(true)
     setFetchMsg('')
-    const withBarcodes = products.filter((p) => p.barcode && p.barcode.length >= 8)
+    const withBarcodes = products.filter((p) => p.barcode && p.barcode.length >= 8 && !PRODUCT_IMAGE_MAP[p.itemNumber])
     const { matched, skipped, total } = await fetchImagesFromOpenFoodFacts(withBarcodes)
     setFetchMsg(`${matched} / ${total} found${skipped > 0 ? `, ${skipped} skipped` : ''}`)
     setFetchingImages(false)
@@ -367,15 +377,25 @@ export default function ProductList() {
         </div>
         <div className="flex items-center justify-between mt-1">
           <p className="text-[11px] text-gray-500">{filtered.length} of {products.length} products</p>
-          <button
-            onClick={() => handleFetchImages(products)}
-            disabled={fetchingImages}
-            className="flex items-center gap-1 text-[11px] text-blue-600 disabled:text-gray-400"
-            title="Fetch product images from Open Food Facts"
-          >
-            <RefreshCw size={10} className={fetchingImages ? 'animate-spin' : ''} />
-            {fetchingImages ? 'Fetching…' : fetchMsg || 'Fetch Images'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleResetImages}
+              disabled={fetchingImages}
+              className="text-[11px] text-gray-500 disabled:text-gray-400"
+              title="Restore baked-in Lactalis product images"
+            >
+              Reset Images
+            </button>
+            <button
+              onClick={() => handleFetchImages(products)}
+              disabled={fetchingImages}
+              className="flex items-center gap-1 text-[11px] text-blue-600 disabled:text-gray-400"
+              title="Fetch images for new products without baked-in images"
+            >
+              <RefreshCw size={10} className={fetchingImages ? 'animate-spin' : ''} />
+              {fetchingImages ? 'Fetching…' : fetchMsg || 'Fetch New'}
+            </button>
+          </div>
         </div>
       </div>
 
