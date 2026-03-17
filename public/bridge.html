@@ -190,7 +190,8 @@
       <li>Save — the bridge now runs automatically on every Lactalis page load</li>
     </ol>
     <button class="btn btn-orange" id="copy-userscript-btn" disabled>Copy Userscript Code</button>
-    <button class="btn btn-primary" id="download-userscript-btn" disabled style="background:#2563eb;">Download milk-bridge.user.js</button>
+    <button class="btn btn-primary" id="download-userscript-btn" disabled style="background:#2563eb;">Save milk-bridge.user.js to Files</button>
+    <p class="section-desc" style="margin-top:6px; margin-bottom:0;">Tap the button → <strong>"Save to Files"</strong> → choose the <strong>Userscripts</strong> folder → Save</p>
     <div class="toast" id="userscript-toast"></div>
   </div>
 
@@ -672,18 +673,35 @@
     var saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null')
     if (!saved) return
     var code = generateUserscriptCode(saved)
-    var blob = new Blob([code], { type: 'application/javascript' })
-    var url = URL.createObjectURL(blob)
-    var a = document.createElement('a')
-    a.href = url
-    a.download = 'milk-bridge.user.js'
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-    userscriptToast.textContent = 'Downloading — save to your Userscripts folder'
-    userscriptToast.className = 'toast info'
-    setTimeout(function() { userscriptToast.className = 'toast' }, 5000)
+    var file = new File([code], 'milk-bridge.user.js', { type: 'application/javascript' })
+
+    // iOS: use native share sheet so user can "Save to Files" → Userscripts folder
+    if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+      navigator.share({ files: [file], title: 'milk-bridge.user.js' }).then(function() {
+        userscriptToast.textContent = 'Save it to the Userscripts folder in Files'
+        userscriptToast.className = 'toast success'
+        setTimeout(function() { userscriptToast.className = 'toast' }, 5000)
+      }).catch(function(e) {
+        if (e.name !== 'AbortError') {
+          userscriptToast.textContent = 'Share cancelled — try again'
+          userscriptToast.className = 'toast error'
+        }
+      })
+    } else {
+      // Desktop/fallback: blob download
+      var blob = new Blob([code], { type: 'application/javascript' })
+      var url = URL.createObjectURL(blob)
+      var a = document.createElement('a')
+      a.href = url
+      a.download = 'milk-bridge.user.js'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      userscriptToast.textContent = 'Downloading — save to your Userscripts folder'
+      userscriptToast.className = 'toast info'
+      setTimeout(function() { userscriptToast.className = 'toast' }, 5000)
+    }
   })
 </script>
 </body>
