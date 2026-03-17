@@ -116,6 +116,15 @@ async function cloudPushOrderResult(submission) {
   })
 }
 
+// ─── Cloud: push order history to KV ─────────────────────────────────────
+
+async function cloudPushOrderHistory(orderHistory) {
+  await cloudFetch('/extension/order-history', {
+    method: 'POST',
+    body: JSON.stringify(orderHistory),
+  })
+}
+
 // ─── Cloud: push cookies to KV ───────────────────────────────────────────────
 
 async function cloudPushCookies() {
@@ -185,6 +194,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       // Cloud: push cookies when we detect a Lactalis page
       cloudPushCookies()
       sendResponse({ ok: true })
+      return true
+
+    // Order history scraped from portal
+    case 'ORDER_HISTORY_UPDATE':
+      chrome.storage.local.set({ orderHistory: msg.payload }, () => {
+        cloudPushOrderHistory(msg.payload)
+        sendResponse({ ok: true })
+      })
       return true
 
     // Schedule data scraped from portal (Session 12)

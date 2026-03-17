@@ -1,7 +1,7 @@
 import { Component, useEffect, useState, type ReactNode } from 'react'
 import { Camera, LayoutDashboard, ShoppingCart, Package, Settings, Sparkles, Upload } from 'lucide-react'
 import { seedDatabase, backfillBakedImages } from './pwa/lib/db'
-import { applyStatusUpdates, applyExtensionSchedule } from './pwa/lib/extensionSync'
+import { applyStatusUpdates, applyExtensionSchedule, applyOrderHistory } from './pwa/lib/extensionSync'
 import Dashboard from './pwa/components/Dashboard'
 import OrderBuilder from './pwa/components/OrderBuilder'
 import MarginAnalysis from './pwa/components/MarginAnalysis'
@@ -85,18 +85,22 @@ export default function App() {
       await Promise.all([
         applyStatusUpdates().catch(console.error),
         applyExtensionSchedule().catch(console.error),
+        applyOrderHistory().catch(console.error),
       ])
       setReady(true)
     })()
 
-    const onStatusUpdate   = () => applyStatusUpdates().catch(console.error)
-    const onScheduleUpdate = () => applyExtensionSchedule().catch(console.error)
+    const onStatusUpdate       = () => applyStatusUpdates().catch(console.error)
+    const onScheduleUpdate     = () => applyExtensionSchedule().catch(console.error)
+    const onOrderHistoryUpdate = () => applyOrderHistory().catch(console.error)
 
-    window.addEventListener('milk-manager-status-update',   onStatusUpdate)
-    window.addEventListener('milk-manager-schedule-update', onScheduleUpdate)
+    window.addEventListener('milk-manager-status-update',        onStatusUpdate)
+    window.addEventListener('milk-manager-schedule-update',      onScheduleUpdate)
+    window.addEventListener('milk-manager-order-history-update', onOrderHistoryUpdate)
     return () => {
-      window.removeEventListener('milk-manager-status-update',   onStatusUpdate)
-      window.removeEventListener('milk-manager-schedule-update', onScheduleUpdate)
+      window.removeEventListener('milk-manager-status-update',        onStatusUpdate)
+      window.removeEventListener('milk-manager-schedule-update',      onScheduleUpdate)
+      window.removeEventListener('milk-manager-order-history-update', onOrderHistoryUpdate)
     }
   }, [])
 

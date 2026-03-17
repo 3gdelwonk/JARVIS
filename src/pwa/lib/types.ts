@@ -57,6 +57,9 @@ export interface Order {
   lactalisOrderNumber?: string;
   invoiceNumber?: string;
   notes?: string;
+  portalSource?: boolean;
+  portalStatus?: string;
+  portalRefNumber?: string;
 }
 
 export interface OrderLine {

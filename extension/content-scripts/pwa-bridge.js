@@ -52,8 +52,9 @@ window.addEventListener('milk-manager-order-sent', syncOrderToExtension)
 
 // ─── Reverse sync keys ───────────────────────────────────────────────────────
 
-const STATUS_KEY   = 'milk-manager-status-updates'
-const SCHEDULE_KEY = 'milk-manager-schedule-from-extension'
+const STATUS_KEY        = 'milk-manager-status-updates'
+const SCHEDULE_KEY      = 'milk-manager-schedule-from-extension'
+const ORDER_HISTORY_KEY = 'milk-manager-order-history'
 
 /**
  * Reads statusUpdates + schedule from chrome.storage.local and mirrors them
@@ -61,7 +62,7 @@ const SCHEDULE_KEY = 'milk-manager-schedule-from-extension'
  * Clears statusUpdates in chrome.storage.local once mirrored (consumed once).
  */
 function syncFromExtension() {
-  chrome.storage.local.get(['statusUpdates', 'schedule'], (result) => {
+  chrome.storage.local.get(['statusUpdates', 'schedule', 'orderHistory'], (result) => {
     if (chrome.runtime.lastError) return
 
     const updates = result.statusUpdates
@@ -78,6 +79,12 @@ function syncFromExtension() {
       localStorage.setItem(SCHEDULE_KEY, JSON.stringify(schedule))
       window.dispatchEvent(new CustomEvent('milk-manager-schedule-update'))
     }
+
+    const orderHistory = result.orderHistory
+    if (orderHistory) {
+      localStorage.setItem(ORDER_HISTORY_KEY, JSON.stringify(orderHistory))
+      window.dispatchEvent(new CustomEvent('milk-manager-order-history-update'))
+    }
   })
 }
 
@@ -87,7 +94,7 @@ syncFromExtension()
 // Reverse sync whenever relevant chrome.storage keys change
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return
-  if ('statusUpdates' in changes || 'schedule' in changes) {
+  if ('statusUpdates' in changes || 'schedule' in changes || 'orderHistory' in changes) {
     syncFromExtension()
   }
 })
