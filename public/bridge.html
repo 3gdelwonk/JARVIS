@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Milk Manager Bridge</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #f3f4f6;
+    min-height: 100vh;
+    padding: 20px;
+  }
+  .card {
+    background: #fff;
+    border-radius: 20px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.12);
+    padding: 28px 22px;
+    max-width: 400px;
+    margin: 0 auto;
+  }
+  h1 { font-size: 22px; color: #1d4ed8; margin-bottom: 4px; text-align: center; }
+  .subtitle { font-size: 13px; color: #6b7280; margin-bottom: 20px; text-align: center; }
+  .section {
+    background: #f9fafb;
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  .section-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #374151;
+    margin-bottom: 8px;
+  }
+  .section-desc { font-size: 13px; color: #6b7280; line-height: 1.5; }
+  input[type="text"], input[type="password"] {
+    width: 100%;
+    border: 1px solid #d1d5db;
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 14px;
+    font-family: ui-monospace, monospace;
+    margin-top: 8px;
+    -webkit-appearance: none;
+  }
+  .btn {
+    display: block;
+    width: 100%;
+    padding: 14px;
+    border-radius: 12px;
+    border: none;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 10px;
+    transition: background 0.15s;
+    -webkit-appearance: none;
+  }
+  .btn-save { background: #e5e7eb; color: #374151; }
+  .btn-primary { background: #1d4ed8; color: #fff; }
+  .btn-primary:disabled { opacity: 0.4; }
+  .btn-copy { background: #059669; color: #fff; }
+  .toast {
+    font-size: 13px;
+    margin-top: 8px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    display: none;
+  }
+  .toast.success { display: block; background: #f0fdf4; color: #166534; }
+  .toast.error { display: block; background: #fef2f2; color: #991b1b; }
+  .code-box {
+    background: #1f2937;
+    color: #e5e7eb;
+    border-radius: 10px;
+    padding: 12px;
+    font-size: 11px;
+    font-family: ui-monospace, monospace;
+    line-height: 1.5;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin-top: 8px;
+    max-height: 150px;
+    overflow-y: auto;
+    -webkit-user-select: all;
+    user-select: all;
+  }
+  ol { padding-left: 20px; }
+  ol li {
+    font-size: 13px;
+    color: #374151;
+    line-height: 1.6;
+    margin-bottom: 4px;
+  }
+  .divider { height: 1px; background: #e5e7eb; margin: 16px 0; }
+  .small { font-size: 12px; color: #9ca3af; text-align: center; margin-top: 12px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Milk Manager Bridge</h1>
+  <p class="subtitle">Sync schedules & submit orders from your phone</p>
+
+  <!-- Step 1: Config -->
+  <div class="section">
+    <div class="section-title">1. Configure (once)</div>
+    <input type="text" id="worker-url" placeholder="https://your-worker.workers.dev" />
+    <input type="password" id="secret" placeholder="Extension secret" />
+    <button class="btn btn-save" id="save-btn">Save</button>
+    <div class="toast" id="save-toast"></div>
+  </div>
+
+  <!-- Step 2: Setup Shortcut -->
+  <div class="section">
+    <div class="section-title">2. Create iOS Shortcut (once)</div>
+    <p class="section-desc">This generates the JavaScript code for your Shortcut. Tap "Copy Code", then follow the steps below.</p>
+    <button class="btn btn-copy" id="copy-code-btn" disabled>Copy Shortcut Code</button>
+    <div class="toast" id="copy-toast"></div>
+
+    <div class="divider"></div>
+    <ol>
+      <li>Open the <strong>Shortcuts</strong> app</li>
+      <li>Tap <strong>+</strong> to create a new shortcut</li>
+      <li>Tap <strong>Add Action</strong>, search for <strong>"Run JavaScript on Web Page"</strong></li>
+      <li>Tap the default code and <strong>Select All → Paste</strong> (the code you just copied)</li>
+      <li>Tap the shortcut name at top, rename to <strong>"Milk Bridge"</strong></li>
+      <li>Tap the <strong>(i)</strong> button → enable <strong>"Show in Share Sheet"</strong></li>
+      <li>Under "Share Sheet Types" keep only <strong>Safari web pages</strong></li>
+      <li>Tap <strong>Done</strong></li>
+    </ol>
+  </div>
+
+  <!-- Step 3: Use it -->
+  <div class="section">
+    <div class="section-title">3. Use it</div>
+    <ol>
+      <li>Open <strong>mylactalis.com.au</strong> in Safari and log in</li>
+      <li>Tap the <strong>Share</strong> button (box with arrow)</li>
+      <li>Scroll down and tap <strong>"Milk Bridge"</strong></li>
+      <li>The floating widget appears — it auto-syncs the schedule</li>
+    </ol>
+    <a href="https://my.lactalis.com.au" target="_blank" class="btn btn-primary" style="text-decoration:none; text-align:center; display:block; margin-top:10px;">
+      Open Lactalis
+    </a>
+  </div>
+
+  <!-- Code preview -->
+  <details>
+    <summary style="font-size:13px; color:#6b7280; cursor:pointer;">View generated code</summary>
+    <div class="code-box" id="code-preview">Save config first…</div>
+  </details>
+
+  <p class="small">
+    Tip: Add this page to your Home Screen for quick access.<br>
+    Share → Add to Home Screen
+  </p>
+</div>
+
+<script>
+  const STORAGE_KEY = 'milk-bridge-config'
+
+  const workerInput = document.getElementById('worker-url')
+  const secretInput = document.getElementById('secret')
+  const saveBtn = document.getElementById('save-btn')
+  const saveToast = document.getElementById('save-toast')
+  const copyBtn = document.getElementById('copy-code-btn')
+  const copyToast = document.getElementById('copy-toast')
+  const codePreview = document.getElementById('code-preview')
+
+  // Load saved config
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY))
+    if (saved) {
+      workerInput.value = saved.w || ''
+      secretInput.value = saved.k || ''
+      updateCode(saved)
+    }
+  } catch {}
+
+  function generateCode(config) {
+    // iOS Shortcuts "Run JavaScript on Web Page" requires calling completion()
+    return `var config = ${JSON.stringify(config)};
+window.__LACTALIS_BRIDGE_CONFIG__ = config;
+
+// Remove old bridge if re-running
+var old = document.getElementById('__lactalis-bridge-host__');
+if (old) old.remove();
+
+var s = document.createElement('script');
+s.src = 'https://3gdelwonk.github.io/JARVIS/lactalis-bridge.js?t=' + Date.now();
+s.onload = function() { completion(true); };
+s.onerror = function() { completion({"error": "Failed to load bridge script"}); };
+document.head.appendChild(s);`
+  }
+
+  function updateCode(config) {
+    const code = generateCode(config)
+    codePreview.textContent = code
+    copyBtn.disabled = false
+  }
+
+  saveBtn.addEventListener('click', function() {
+    var w = workerInput.value.trim()
+    var k = secretInput.value.trim()
+    if (!w || !k) {
+      saveToast.textContent = 'Both fields are required'
+      saveToast.className = 'toast error'
+      return
+    }
+    var config = { w: w, k: k }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(config))
+    updateCode(config)
+    saveToast.textContent = 'Config saved'
+    saveToast.className = 'toast success'
+    setTimeout(function() { saveToast.className = 'toast' }, 2000)
+  })
+
+  copyBtn.addEventListener('click', function() {
+    var saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null')
+    if (!saved) return
+    var code = generateCode(saved)
+
+    navigator.clipboard.writeText(code).then(function() {
+      copyToast.textContent = 'Copied! Now open the Shortcuts app.'
+      copyToast.className = 'toast success'
+      setTimeout(function() { copyToast.className = 'toast' }, 4000)
+    }).catch(function() {
+      // Fallback: select the code preview for manual copy
+      codePreview.scrollIntoView()
+      var range = document.createRange()
+      range.selectNodeContents(codePreview)
+      var sel = window.getSelection()
+      sel.removeAllRanges()
+      sel.addRange(range)
+      copyToast.textContent = 'Long-press the code above to copy it'
+      copyToast.className = 'toast error'
+    })
+  })
+</script>
+</body>
+</html>
