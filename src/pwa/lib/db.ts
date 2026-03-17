@@ -115,3 +115,30 @@ export async function seedDatabase(): Promise<void> {
     navigator.storage.persist()
   }
 }
+
+/**
+ * Replace any existing product images with baked-in thumbnails from the bundle.
+ * Runs once per app version — overwrites old Open Food Facts full-size images.
+ */
+export async function backfillBakedImages(): Promise<void> {
+  const imageKeys = Object.keys(PRODUCT_IMAGE_MAP)
+  if (imageKeys.length === 0) return
+
+  const allProducts = await db.products.toArray()
+  const updates: { key: number; changes: { imageUrl: string } }[] = []
+
+  for (const p of allProducts) {
+    const baked = PRODUCT_IMAGE_MAP[p.itemNumber]
+    if (baked && p.imageUrl !== baked) {
+      updates.push({ key: p.id!, changes: { imageUrl: baked } })
+    }
+  }
+
+  if (updates.length > 0) {
+    await db.transaction('rw', db.products, async () => {
+      for (const u of updates) {
+        await db.products.update(u.key, u.changes)
+      }
+    })
+  }
+}

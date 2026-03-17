@@ -1,6 +1,6 @@
 import { Component, useEffect, useState, type ReactNode } from 'react'
 import { Camera, LayoutDashboard, ShoppingCart, Package, Settings, Sparkles, Upload } from 'lucide-react'
-import { seedDatabase } from './pwa/lib/db'
+import { seedDatabase, backfillBakedImages } from './pwa/lib/db'
 import { applyStatusUpdates, applyExtensionSchedule } from './pwa/lib/extensionSync'
 import Dashboard from './pwa/components/Dashboard'
 import OrderBuilder from './pwa/components/OrderBuilder'
@@ -81,6 +81,7 @@ export default function App() {
     // Await seed before rendering so Order Builder sees products on first load
     ;(async () => {
       await seedDatabase().catch(console.error)
+      await backfillBakedImages().catch(console.error)
       await Promise.all([
         applyStatusUpdates().catch(console.error),
         applyExtensionSchedule().catch(console.error),
