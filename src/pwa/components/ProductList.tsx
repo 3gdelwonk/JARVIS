@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { ChevronDown, ChevronUp, ExternalLink, ImageOff, RefreshCw, Search } from 'lucide-react'
 import { db } from '../lib/db'
+import { PRODUCT_IMAGE_MAP } from '../data/productImageMap'
 import type { Product, StockSnapshot } from '../lib/types'
 
 // Money helper — avoids floating point errors
@@ -296,10 +297,10 @@ export default function ProductList() {
   const [fetchingImages, setFetchingImages] = useState(false)
   const [fetchMsg, setFetchMsg] = useState('')
 
-  // Auto-recover missing images on mount (fallback to Open Food Facts)
+  // Auto-recover missing images on mount (only for products without baked-in images)
   useEffect(() => {
     db.products
-      .filter((p) => p.active !== false && !p.imageUrl && !!p.barcode && p.barcode.length >= 8)
+      .filter((p) => p.active !== false && !p.imageUrl && !PRODUCT_IMAGE_MAP[p.itemNumber] && !!p.barcode && p.barcode.length >= 8)
       .toArray()
       .then((missing) => {
         if (missing.length > 0) fetchImagesFromOpenFoodFacts(missing)
