@@ -190,6 +190,7 @@
       <li>Save — the bridge now runs automatically on every Lactalis page load</li>
     </ol>
     <button class="btn btn-orange" id="copy-userscript-btn" disabled>Copy Userscript Code</button>
+    <button class="btn btn-primary" id="download-userscript-btn" disabled style="background:#2563eb;">Download milk-bridge.user.js</button>
     <div class="toast" id="userscript-toast"></div>
   </div>
 
@@ -217,6 +218,7 @@
   var copyBtn = document.getElementById('copy-code-btn')
   var copyToast = document.getElementById('copy-toast')
   var copyUserscriptBtn = document.getElementById('copy-userscript-btn')
+  var downloadUserscriptBtn = document.getElementById('download-userscript-btn')
   var userscriptToast = document.getElementById('userscript-toast')
   var codePreview = document.getElementById('code-preview')
 
@@ -228,6 +230,7 @@
       secretInput.value = saved.k || ''
       copyBtn.disabled = false
       copyUserscriptBtn.disabled = false
+      downloadUserscriptBtn.disabled = false
       updatePreview(saved)
     }
   } catch(e) {}
@@ -616,6 +619,7 @@
     localStorage.setItem(STORAGE_KEY, JSON.stringify(config))
     copyBtn.disabled = false
     copyUserscriptBtn.disabled = false
+    downloadUserscriptBtn.disabled = false
     updatePreview(config)
     saveToast.textContent = 'Config saved'
     saveToast.className = 'toast success'
@@ -662,6 +666,24 @@
       userscriptToast.textContent = 'Copy failed — long-press code at bottom to select'
       userscriptToast.className = 'toast error'
     })
+  })
+
+  downloadUserscriptBtn.addEventListener('click', function() {
+    var saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null')
+    if (!saved) return
+    var code = generateUserscriptCode(saved)
+    var blob = new Blob([code], { type: 'application/javascript' })
+    var url = URL.createObjectURL(blob)
+    var a = document.createElement('a')
+    a.href = url
+    a.download = 'milk-bridge.user.js'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    userscriptToast.textContent = 'Downloading — save to your Userscripts folder'
+    userscriptToast.className = 'toast info'
+    setTimeout(function() { userscriptToast.className = 'toast' }, 5000)
   })
 </script>
 </body>
