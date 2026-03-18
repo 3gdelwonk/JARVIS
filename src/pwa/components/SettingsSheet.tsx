@@ -1,15 +1,18 @@
 /**
- * SettingsSheet.tsx — Forecast settings bottom sheet
+ * SettingsSheet.tsx — App settings bottom sheet
  *
- * Slide-up panel for adjusting ForecastSettings:
- *  - Lead time days (1–3)
- *  - Safety stock multiplier (0–3, step 0.1)
- *  - Target days of stock (1–14)
- *  - Global order multiplier (0.5–2.0, step 0.05)
+ * Sections:
+ *  - Forecast (simple: Days of Stock + Order Adjustment w/ presets; advanced: Lead Time + Safety Stock + formula)
+ *  - Gemini API Key
+ *  - Gmail Sync
+ *  - Store Info
+ *  - Cloud & Extension (Worker URL + Lactalis Cloud Login + Bookmarklet)
+ *  - Sync Status
+ *  - Backup & Transfer
  */
 
 import { useRef, useState, useEffect } from 'react'
-import { Clipboard, Download, RefreshCw, Upload, X, RotateCcw } from 'lucide-react'
+import { Clipboard, ChevronDown, ChevronRight, Download, RefreshCw, Upload, X, RotateCcw } from 'lucide-react'
 import {
   getSettings,
   saveSettings,
@@ -26,6 +29,7 @@ interface Props {
 
 export default function SettingsSheet({ onClose }: Props) {
   const [s, setS] = useState<ForecastSettings>(() => getSettings())
+  const [advancedOpen, setAdvancedOpen] = useState(false)
   const [backupStatus, setBackupStatus] = useState<string | null>(null)
   const [transferJson, setTransferJson] = useState<string | null>(null)
   const [hasCopied, setHasCopied] = useState(false)
@@ -217,7 +221,7 @@ export default function SettingsSheet({ onClose }: Props) {
 
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-          <h2 className="text-base font-semibold text-gray-900">Forecast Settings</h2>
+          <h2 className="text-base font-semibold text-gray-900">Settings</h2>
           <button
             onClick={onClose}
             className="p-1.5 rounded-full hover:bg-gray-100 text-gray-500"
@@ -230,113 +234,144 @@ export default function SettingsSheet({ onClose }: Props) {
         {/* Controls */}
         <div className="px-4 py-4 space-y-5 overflow-y-auto max-h-[70vh]">
 
-          {/* Lead time */}
+          {/* ── Forecast ──────────────────────────────────── */}
           <div>
-            <div className="flex justify-between items-baseline mb-1">
-              <label htmlFor="setting-lead-time" className="text-sm font-medium text-gray-700">Lead Time</label>
-              <span className="text-sm font-semibold text-blue-600">
-                {s.leadTimeDays} day{s.leadTimeDays !== 1 ? 's' : ''}
-              </span>
+            <p className="text-sm font-semibold text-gray-800 mb-3">Forecast</p>
+
+            {/* Days of Stock */}
+            <div className="mb-4">
+              <div className="flex justify-between items-baseline mb-1">
+                <label htmlFor="setting-target-days" className="text-sm font-medium text-gray-700">Days of Stock</label>
+                <span className="text-sm font-semibold text-blue-600">
+                  {s.targetDaysOfStock} days
+                </span>
+              </div>
+              <input
+                id="setting-target-days"
+                type="range"
+                min={1}
+                max={14}
+                step={1}
+                value={s.targetDaysOfStock}
+                onChange={(e) => set('targetDaysOfStock', Number(e.target.value))}
+                className="w-full accent-blue-600"
+              />
+              <p className="text-[11px] text-gray-400 mt-0.5">
+                How many days to keep on shelf after delivery
+              </p>
             </div>
-            <input
-              id="setting-lead-time"
-              type="range"
-              min={1}
-              max={3}
-              step={1}
-              value={s.leadTimeDays}
-              onChange={(e) => set('leadTimeDays', Number(e.target.value))}
-              className="w-full accent-blue-600"
-            />
-            <p className="text-[11px] text-gray-400 mt-0.5">
-              Hours between placing order and delivery, expressed in days. Default: 1.
-            </p>
+
+            {/* Order Adjustment */}
+            <div className="mb-3">
+              <div className="flex justify-between items-baseline mb-1">
+                <label htmlFor="setting-global-mult" className="text-sm font-medium text-gray-700">Order Adjustment</label>
+                <span className="text-sm font-semibold text-blue-600">
+                  ×{s.globalMultiplier.toFixed(2)}
+                </span>
+              </div>
+              {/* Preset buttons */}
+              <div className="flex gap-1.5 mb-2">
+                {[0.75, 1.0, 1.25, 1.5].map((v) => (
+                  <button
+                    key={v}
+                    onClick={() => set('globalMultiplier', v)}
+                    className={`flex-1 py-1 text-xs font-medium rounded-lg border transition-colors ${
+                      s.globalMultiplier === v
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'border-gray-300 text-gray-600 hover:border-blue-300 hover:text-blue-600'
+                    }`}
+                  >
+                    ×{v.toFixed(2).replace('.00', '').replace(/(\.\d)0$/, '$1')}
+                  </button>
+                ))}
+              </div>
+              <input
+                id="setting-global-mult"
+                type="range"
+                min={0.5}
+                max={2.0}
+                step={0.05}
+                value={s.globalMultiplier}
+                onChange={(e) => set('globalMultiplier', Number(e.target.value))}
+                className="w-full accent-blue-600"
+              />
+              <div className="flex justify-between text-[10px] text-gray-400 mt-0.5">
+                <span>0.5× reduce</span>
+                <span>1.0 as forecast</span>
+                <span>2.0× double</span>
+              </div>
+            </div>
+
+            {/* Advanced expander */}
+            <button
+              onClick={() => setAdvancedOpen((o) => !o)}
+              className="flex items-center gap-1 text-xs text-blue-600 font-medium py-1 -ml-0.5"
+            >
+              {advancedOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              Advanced
+            </button>
+
+            {advancedOpen && (
+              <div className="mt-3 space-y-4 pl-1 border-l-2 border-gray-100">
+                {/* Lead time */}
+                <div>
+                  <div className="flex justify-between items-baseline mb-1">
+                    <label htmlFor="setting-lead-time" className="text-sm font-medium text-gray-700">Lead Time</label>
+                    <span className="text-sm font-semibold text-blue-600">
+                      {s.leadTimeDays} day{s.leadTimeDays !== 1 ? 's' : ''}
+                    </span>
+                  </div>
+                  <input
+                    id="setting-lead-time"
+                    type="range"
+                    min={1}
+                    max={3}
+                    step={1}
+                    value={s.leadTimeDays}
+                    onChange={(e) => set('leadTimeDays', Number(e.target.value))}
+                    className="w-full accent-blue-600"
+                  />
+                  <p className="text-[11px] text-gray-400 mt-0.5">
+                    Days between order cutoff and delivery
+                  </p>
+                </div>
+
+                {/* Safety stock */}
+                <div>
+                  <div className="flex justify-between items-baseline mb-1">
+                    <label htmlFor="setting-safety-stock" className="text-sm font-medium text-gray-700">Safety Stock</label>
+                    <span className="text-sm font-semibold text-blue-600">
+                      ×{s.safetyStockMultiplier.toFixed(1)}
+                    </span>
+                  </div>
+                  <input
+                    id="setting-safety-stock"
+                    type="range"
+                    min={0}
+                    max={3}
+                    step={0.1}
+                    value={s.safetyStockMultiplier}
+                    onChange={(e) => set('safetyStockMultiplier', Number(e.target.value))}
+                    className="w-full accent-blue-600"
+                  />
+                  <p className="text-[11px] text-gray-400 mt-0.5">
+                    Buffer for demand spikes — higher = more cushion
+                  </p>
+                </div>
+
+                {/* Formula */}
+                <div className="bg-gray-50 rounded-lg p-3">
+                  <p className="text-[11px] text-gray-500 font-mono leading-relaxed">
+                    qty = (targetDays × avgDaily) + ({s.safetyStockMultiplier.toFixed(1)}σ × √{s.leadTimeDays}) − stock
+                    <br />
+                    × {s.globalMultiplier.toFixed(2)} adjustment
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Safety stock multiplier */}
-          <div>
-            <div className="flex justify-between items-baseline mb-1">
-              <label htmlFor="setting-safety-stock" className="text-sm font-medium text-gray-700">Safety Stock Multiplier</label>
-              <span className="text-sm font-semibold text-blue-600">
-                ×{s.safetyStockMultiplier.toFixed(1)}
-              </span>
-            </div>
-            <input
-              id="setting-safety-stock"
-              type="range"
-              min={0}
-              max={3}
-              step={0.1}
-              value={s.safetyStockMultiplier}
-              onChange={(e) => set('safetyStockMultiplier', Number(e.target.value))}
-              className="w-full accent-blue-600"
-            />
-            <div className="flex justify-between text-[10px] text-gray-400 mt-0.5">
-              <span>0 = no buffer</span>
-              <span>1.5 = FMCG standard</span>
-              <span>3 = very conservative</span>
-            </div>
-          </div>
-
-          {/* Target days of stock */}
-          <div>
-            <div className="flex justify-between items-baseline mb-1">
-              <label htmlFor="setting-target-days" className="text-sm font-medium text-gray-700">Target Days of Stock</label>
-              <span className="text-sm font-semibold text-blue-600">
-                {s.targetDaysOfStock} days
-              </span>
-            </div>
-            <input
-              id="setting-target-days"
-              type="range"
-              min={1}
-              max={14}
-              step={1}
-              value={s.targetDaysOfStock}
-              onChange={(e) => set('targetDaysOfStock', Number(e.target.value))}
-              className="w-full accent-blue-600"
-            />
-            <p className="text-[11px] text-gray-400 mt-0.5">
-              How many days of stock to carry after each delivery. Default: 4. Per-product
-              overrides take priority.
-            </p>
-          </div>
-
-          {/* Global multiplier */}
-          <div>
-            <div className="flex justify-between items-baseline mb-1">
-              <label htmlFor="setting-global-mult" className="text-sm font-medium text-gray-700">Global Order Multiplier</label>
-              <span className="text-sm font-semibold text-blue-600">
-                ×{s.globalMultiplier.toFixed(2)}
-              </span>
-            </div>
-            <input
-              id="setting-global-mult"
-              type="range"
-              min={0.5}
-              max={2.0}
-              step={0.05}
-              value={s.globalMultiplier}
-              onChange={(e) => set('globalMultiplier', Number(e.target.value))}
-              className="w-full accent-blue-600"
-            />
-            <div className="flex justify-between text-[10px] text-gray-400 mt-0.5">
-              <span>0.5× = reduce all</span>
-              <span>1.0 = as forecast</span>
-              <span>2.0× = double all</span>
-            </div>
-          </div>
-
-          {/* Formula reminder */}
-          <div className="bg-gray-50 rounded-lg p-3">
-            <p className="text-[11px] text-gray-500 font-mono leading-relaxed">
-              qty = (targetDays × avgDaily) + ({s.safetyStockMultiplier.toFixed(1)}σ × √{s.leadTimeDays}) − stock
-              <br />
-              × {s.globalMultiplier.toFixed(2)} global
-            </p>
-          </div>
-
-          {/* Gemini API Key */}
+          {/* ── Gemini API Key ─────────────────────────────── */}
           <div className="border-t border-gray-100 pt-4">
             <p className="text-sm font-medium text-gray-700 mb-0.5">Gemini API Key</p>
             <p className="text-[11px] text-gray-400 mb-2">
@@ -375,7 +410,7 @@ export default function SettingsSheet({ onClose }: Props) {
             </div>
           </div>
 
-          {/* Gmail Sync */}
+          {/* ── Gmail Sync ─────────────────────────────────── */}
           <div className="border-t border-gray-100 pt-4">
             <p className="text-sm font-medium text-gray-700 mb-0.5">Gmail Sync</p>
             <p className="text-[11px] text-gray-400 mb-2">
@@ -414,7 +449,7 @@ export default function SettingsSheet({ onClose }: Props) {
             </label>
           </div>
 
-          {/* Store Info */}
+          {/* ── Store Info ─────────────────────────────────── */}
           <div className="border-t border-gray-100 pt-4">
             <p className="text-sm font-medium text-gray-700 mb-0.5">Store Info</p>
             <p className="text-[11px] text-gray-400 mb-2">
@@ -455,161 +490,166 @@ export default function SettingsSheet({ onClose }: Props) {
             </button>
           </div>
 
-          {/* Worker URL (Cloud Relay) */}
+          {/* ── Cloud & Extension ──────────────────────────── */}
           <div className="border-t border-gray-100 pt-4">
-            <p className="text-sm font-medium text-gray-700 mb-0.5">Cloud Relay</p>
-            <p className="text-[11px] text-gray-400 mb-2">
-              Worker URL for cloud schedule sync and order relay via the desktop extension.
-            </p>
-            <input
-              type="text"
-              placeholder="https://your-worker.workers.dev"
-              value={workerUrl}
-              onChange={(e) => setWorkerUrl(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono mb-2"
-            />
-            <button
-              onClick={() => {
-                const cleaned = workerUrl.replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').trim()
-                localStorage.setItem('milk-manager-worker-url', cleaned)
-                setWorkerUrl(cleaned)
-                setWorkerUrlSaved(true)
-                setTimeout(() => setWorkerUrlSaved(false), 2000)
-              }}
-              className="w-full py-2 bg-blue-600 text-white text-sm font-medium rounded-lg"
-            >
-              {workerUrlSaved ? 'Saved' : 'Save Worker URL'}
-            </button>
-          </div>
+            <p className="text-sm font-semibold text-gray-800 mb-3">Cloud &amp; Extension</p>
 
-          {/* Lactalis Cloud Login */}
-          <div className="border-t border-gray-100 pt-4">
-            <p className="text-sm font-medium text-gray-700 mb-0.5">Lactalis Cloud Login</p>
-            <p className="text-[11px] text-gray-400 mb-2">
-              Login to sync schedule and orders directly from your phone — no extension needed.
-            </p>
-            {cloudLoggedIn ? (
-              <div className="space-y-2">
-                <div className="flex items-center gap-2 text-sm text-green-600 font-medium">
-                  <span className="w-2 h-2 bg-green-500 rounded-full" />
-                  Cloud session active
-                </div>
-                <button
-                  onClick={() => { cloudLogout(); setCloudLoggedIn(false); setLoginStatus(null) }}
-                  className="w-full py-2 border border-red-200 text-red-600 text-sm font-medium rounded-lg"
-                >
-                  Logout
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <input
-                  type="text"
-                  placeholder="Lactalis username or email"
-                  value={lactalisUser}
-                  onChange={(e) => setLactalisUser(e.target.value)}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                  autoComplete="username"
-                />
-                <input
-                  type="password"
-                  placeholder="Password"
-                  value={lactalisPass}
-                  onChange={(e) => setLactalisPass(e.target.value)}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                  autoComplete="current-password"
-                />
-                <button
-                  onClick={async () => {
-                    if (!workerUrl.trim()) {
-                      setLoginStatus('Set Worker URL first')
-                      return
-                    }
-                    setLoggingIn(true)
-                    setLoginStatus(null)
-                    const result = await loginToCloud(lactalisUser.trim(), lactalisPass)
-                    setLoggingIn(false)
-                    if (result.success) {
-                      setCloudLoggedIn(true)
-                      setLoginStatus('Logged in')
-                      setLactalisPass('')
-                    } else {
-                      setLoginStatus(result.error ?? 'Login failed')
-                    }
-                  }}
-                  disabled={!lactalisUser.trim() || !lactalisPass || loggingIn}
-                  className="w-full py-2 bg-blue-600 text-white text-sm font-medium rounded-lg disabled:opacity-40"
-                >
-                  {loggingIn ? 'Logging in...' : 'Login to Lactalis'}
-                </button>
-              </div>
-            )}
-            {loginStatus && (
-              <p className={`text-[11px] mt-1.5 ${loginStatus === 'Logged in' ? 'text-green-600' : 'text-red-500'}`}>
-                {loginStatus}
+            {/* Worker URL */}
+            <div className="mb-4">
+              <p className="text-sm font-medium text-gray-700 mb-0.5">Worker URL</p>
+              <p className="text-[11px] text-gray-400 mb-2">
+                Cloudflare Worker for schedule sync and order relay.
               </p>
-            )}
-          </div>
-
-          {/* Lactalis Bookmarklet */}
-          <div className="border-t border-gray-100 pt-4">
-            <p className="text-sm font-medium text-gray-700 mb-0.5">Lactalis Bookmarklet</p>
-            <p className="text-[11px] text-gray-400 mb-2">
-              Sync schedules and submit orders from your phone browser — no extension needed.
-              Log into mylactalis.com.au on your phone, then tap the bookmarklet.
-            </p>
-            <input
-              type="password"
-              placeholder="Extension secret"
-              value={extSecret}
-              onChange={(e) => setExtSecret(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono mb-2"
-            />
-            <div className="flex gap-2 mb-2">
+              <input
+                type="text"
+                placeholder="https://your-worker.workers.dev"
+                value={workerUrl}
+                onChange={(e) => setWorkerUrl(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono mb-2"
+              />
               <button
                 onClick={() => {
-                  localStorage.setItem('milk-manager-ext-secret', extSecret.trim())
-                  setExtSecretSaved(true)
-                  setTimeout(() => setExtSecretSaved(false), 2000)
+                  const cleaned = workerUrl.replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').trim()
+                  localStorage.setItem('milk-manager-worker-url', cleaned)
+                  setWorkerUrl(cleaned)
+                  setWorkerUrlSaved(true)
+                  setTimeout(() => setWorkerUrlSaved(false), 2000)
                 }}
-                disabled={!extSecret.trim()}
-                className="flex-1 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg disabled:opacity-40"
+                className="w-full py-2 bg-blue-600 text-white text-sm font-medium rounded-lg"
               >
-                {extSecretSaved ? 'Saved' : 'Save Secret'}
-              </button>
-              <button
-                onClick={async () => {
-                  const w = workerUrl.trim() || localStorage.getItem('milk-manager-worker-url') || ''
-                  const k = extSecret.trim()
-                  if (!w || !k) return
-                  const configStr = JSON.stringify({ w, k }).replace(/'/g, "\\'")
-                  const js = `javascript:void(function(){window.__LACTALIS_BRIDGE_CONFIG__=${configStr};var s=document.createElement('script');s.src='https://3gdelwonk.github.io/JARVIS/lactalis-bridge.js';document.head.appendChild(s)})()`
-                  await navigator.clipboard.writeText(js)
-                  setBookmarkletCopied(true)
-                  setTimeout(() => setBookmarkletCopied(false), 2000)
-                }}
-                disabled={!workerUrl.trim() || !extSecret.trim()}
-                className="flex-1 py-2 border border-blue-300 text-blue-600 text-sm font-medium rounded-lg disabled:opacity-40"
-              >
-                {bookmarkletCopied ? 'Copied!' : 'Copy Bookmarklet'}
+                {workerUrlSaved ? 'Saved' : 'Save Worker URL'}
               </button>
             </div>
-            {(!workerUrl.trim() || !extSecret.trim()) && (
-              <p className="text-[11px] text-amber-600 mb-1">
-                Set both Worker URL (above) and Extension Secret to generate the bookmarklet.
+
+            {/* Lactalis Cloud Login */}
+            <div className="mb-4">
+              <p className="text-sm font-medium text-gray-700 mb-0.5">Lactalis Login</p>
+              <p className="text-[11px] text-gray-400 mb-2">
+                Submit orders and sync schedule directly from your phone — no extension needed.
               </p>
-            )}
-            <details className="text-[11px] text-gray-400">
-              <summary className="cursor-pointer text-blue-500">Installation instructions</summary>
-              <div className="mt-1.5 space-y-1">
-                <p><strong>iOS Safari:</strong> Copy the bookmarklet, create any bookmark, edit it, and replace the URL with the copied text.</p>
-                <p><strong>Android Chrome:</strong> Copy the bookmarklet, add any page as a bookmark, edit the bookmark, and replace the URL with the copied text.</p>
-                <p>Then log into mylactalis.com.au and tap the bookmark to activate.</p>
+              {cloudLoggedIn ? (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-sm text-green-600 font-medium">
+                    <span className="w-2 h-2 bg-green-500 rounded-full" />
+                    Cloud session active
+                  </div>
+                  <button
+                    onClick={() => { cloudLogout(); setCloudLoggedIn(false); setLoginStatus(null) }}
+                    className="w-full py-2 border border-red-200 text-red-600 text-sm font-medium rounded-lg"
+                  >
+                    Logout
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <input
+                    type="text"
+                    placeholder="Lactalis username or email"
+                    value={lactalisUser}
+                    onChange={(e) => setLactalisUser(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                    autoComplete="username"
+                  />
+                  <input
+                    type="password"
+                    placeholder="Password"
+                    value={lactalisPass}
+                    onChange={(e) => setLactalisPass(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                    autoComplete="current-password"
+                  />
+                  <button
+                    onClick={async () => {
+                      if (!workerUrl.trim()) {
+                        setLoginStatus('Set Worker URL first')
+                        return
+                      }
+                      setLoggingIn(true)
+                      setLoginStatus(null)
+                      const result = await loginToCloud(lactalisUser.trim(), lactalisPass)
+                      setLoggingIn(false)
+                      if (result.success) {
+                        setCloudLoggedIn(true)
+                        setLoginStatus('Logged in')
+                        setLactalisPass('')
+                      } else {
+                        setLoginStatus(result.error ?? 'Login failed')
+                      }
+                    }}
+                    disabled={!lactalisUser.trim() || !lactalisPass || loggingIn}
+                    className="w-full py-2 bg-blue-600 text-white text-sm font-medium rounded-lg disabled:opacity-40"
+                  >
+                    {loggingIn ? 'Logging in...' : 'Login to Lactalis'}
+                  </button>
+                </div>
+              )}
+              {loginStatus && (
+                <p className={`text-[11px] mt-1.5 ${loginStatus === 'Logged in' ? 'text-green-600' : 'text-red-500'}`}>
+                  {loginStatus}
+                </p>
+              )}
+            </div>
+
+            {/* Bookmarklet */}
+            <div>
+              <p className="text-sm font-medium text-gray-700 mb-0.5">Bookmarklet</p>
+              <p className="text-[11px] text-gray-400 mb-2">
+                Sync schedules and submit orders from your phone browser.
+                Log into mylactalis.com.au, then tap the bookmarklet.
+              </p>
+              <input
+                type="password"
+                placeholder="Extension secret"
+                value={extSecret}
+                onChange={(e) => setExtSecret(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono mb-2"
+              />
+              <div className="flex gap-2 mb-2">
+                <button
+                  onClick={() => {
+                    localStorage.setItem('milk-manager-ext-secret', extSecret.trim())
+                    setExtSecretSaved(true)
+                    setTimeout(() => setExtSecretSaved(false), 2000)
+                  }}
+                  disabled={!extSecret.trim()}
+                  className="flex-1 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg disabled:opacity-40"
+                >
+                  {extSecretSaved ? 'Saved' : 'Save Secret'}
+                </button>
+                <button
+                  onClick={async () => {
+                    const w = workerUrl.trim() || localStorage.getItem('milk-manager-worker-url') || ''
+                    const k = extSecret.trim()
+                    if (!w || !k) return
+                    const configStr = JSON.stringify({ w, k }).replace(/'/g, "\\'")
+                    const js = `javascript:void(function(){window.__LACTALIS_BRIDGE_CONFIG__=${configStr};var s=document.createElement('script');s.src='https://3gdelwonk.github.io/JARVIS/lactalis-bridge.js';document.head.appendChild(s)})()`
+                    await navigator.clipboard.writeText(js)
+                    setBookmarkletCopied(true)
+                    setTimeout(() => setBookmarkletCopied(false), 2000)
+                  }}
+                  disabled={!workerUrl.trim() || !extSecret.trim()}
+                  className="flex-1 py-2 border border-blue-300 text-blue-600 text-sm font-medium rounded-lg disabled:opacity-40"
+                >
+                  {bookmarkletCopied ? 'Copied!' : 'Copy Bookmarklet'}
+                </button>
               </div>
-            </details>
+              {(!workerUrl.trim() || !extSecret.trim()) && (
+                <p className="text-[11px] text-amber-600 mb-1">
+                  Set both Worker URL and Extension Secret above to generate the bookmarklet.
+                </p>
+              )}
+              <details className="text-[11px] text-gray-400">
+                <summary className="cursor-pointer text-blue-500">Installation instructions</summary>
+                <div className="mt-1.5 space-y-1">
+                  <p><strong>iOS Safari:</strong> Copy the bookmarklet, create any bookmark, edit it, and replace the URL with the copied text.</p>
+                  <p><strong>Android Chrome:</strong> Copy the bookmarklet, add any page as a bookmark, edit the bookmark, and replace the URL with the copied text.</p>
+                  <p>Then log into mylactalis.com.au and tap the bookmark to activate.</p>
+                </div>
+              </details>
+            </div>
           </div>
 
-          {/* Sync Status */}
+          {/* ── Sync Status ────────────────────────────────── */}
           <div className="border-t border-gray-100 pt-4">
             <p className="text-sm font-medium text-gray-700 mb-0.5">Sync Status</p>
             <div className="text-[11px] text-gray-500 space-y-1 mb-2">
@@ -645,9 +685,9 @@ export default function SettingsSheet({ onClose }: Props) {
             )}
           </div>
 
-          {/* Backup / Restore */}
+          {/* ── Backup & Transfer ──────────────────────────── */}
           <div className="border-t border-gray-100 pt-4">
-            <p className="text-sm font-medium text-gray-700 mb-0.5">Backup & Transfer</p>
+            <p className="text-sm font-medium text-gray-700 mb-0.5">Backup &amp; Transfer</p>
             <p className="text-[11px] text-gray-400 mb-2">Share your data to any device via AirDrop, Messages, or email</p>
             <div className="flex gap-2 mb-2">
               <button
@@ -655,7 +695,7 @@ export default function SettingsSheet({ onClose }: Props) {
                 className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-700"
               >
                 <Download size={14} />
-                Export & Share
+                Export &amp; Share
               </button>
               <button
                 onClick={() => { setPasteMode(false); handleRestoreClick() }}

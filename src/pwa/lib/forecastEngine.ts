@@ -29,7 +29,7 @@ export interface ForecastSettings {
 export const DEFAULT_SETTINGS: ForecastSettings = {
   leadTimeDays: 1,
   safetyStockMultiplier: 1.5,
-  targetDaysOfStock: 4,
+  targetDaysOfStock: 3,
   globalMultiplier: 1.0,
 }
 
