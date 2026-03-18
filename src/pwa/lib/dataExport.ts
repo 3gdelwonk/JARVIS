@@ -29,6 +29,7 @@ export interface BackupPayload {
     priceHistory: unknown[]
     expiryBatches: unknown[]
     wasteLog: unknown[]
+    claimRecords: unknown[]
   }
 }
 
@@ -46,6 +47,7 @@ export async function exportAllData(): Promise<string> {
     priceHistory,
     expiryBatches,
     wasteLog,
+    claimRecords,
   ] = await Promise.all([
     db.products.toArray(),
     db.stockSnapshots.toArray(),
@@ -57,6 +59,7 @@ export async function exportAllData(): Promise<string> {
     db.priceHistory.toArray(),
     db.expiryBatches.toArray(),
     db.wasteLog.toArray(),
+    db.claimRecords.toArray(),
   ])
 
   const payload: BackupPayload = {
@@ -79,6 +82,7 @@ export async function exportAllData(): Promise<string> {
       priceHistory,
       expiryBatches,
       wasteLog,
+      claimRecords,
     },
   }
 
@@ -122,6 +126,7 @@ export async function importAllData(json: string): Promise<void> {
       db.priceHistory,
       db.expiryBatches,
       db.wasteLog,
+      db.claimRecords,
     ],
     async () => {
       await Promise.all([
@@ -135,6 +140,7 @@ export async function importAllData(json: string): Promise<void> {
         db.priceHistory.clear(),
         db.expiryBatches.clear(),
         db.wasteLog.clear(),
+        db.claimRecords.clear(),
       ])
 
       await Promise.all([
@@ -148,6 +154,7 @@ export async function importAllData(json: string): Promise<void> {
         db.priceHistory.bulkAdd(t.priceHistory as never[]),
         db.expiryBatches.bulkAdd(t.expiryBatches as never[]),
         db.wasteLog.bulkAdd(t.wasteLog as never[]),
+        ...(t.claimRecords?.length ? [db.claimRecords.bulkAdd(t.claimRecords as never[])] : []),
       ])
     },
   )
