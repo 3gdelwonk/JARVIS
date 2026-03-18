@@ -56,7 +56,9 @@ function corsHeaders(origin: string, env: Env): Record<string, string> {
     'https://my.lactalis.com.au',
     'https://www.mylactalis.com.au',
   ])
-  const effectiveOrigin = allowList.has(origin) ? origin : envAllowed
+  // Allow Chrome extension origins (chrome-extension://...)
+  const isExtension = origin.startsWith('chrome-extension://')
+  const effectiveOrigin = allowList.has(origin) || isExtension ? origin : envAllowed
   return {
     'Access-Control-Allow-Origin': effectiveOrigin,
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
