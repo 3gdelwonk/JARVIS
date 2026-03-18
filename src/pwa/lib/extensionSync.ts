@@ -166,7 +166,17 @@ const CLOUD_TOKEN_KEY = 'milk-manager-cloud-token'
 const CLOUD_TOKEN_EXPIRY_KEY = 'milk-manager-cloud-token-expiry'
 
 function getWorkerUrl(): string | null {
-  return localStorage.getItem('milk-manager-worker-url')?.replace(/\/+$/, '') || null
+  const raw = localStorage.getItem('milk-manager-worker-url')
+  if (!raw) return null
+  // Strip invisible unicode chars (zero-width spaces, BOM, NBSP) + trim + remove trailing slashes
+  const cleaned = raw.replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').trim().replace(/\/+$/, '')
+  if (!cleaned) return null
+  try {
+    new URL(cleaned) // validate URL format
+    return cleaned
+  } catch {
+    return null
+  }
 }
 
 function getCloudToken(): string | null {
@@ -197,7 +207,7 @@ export async function loginToCloud(
   password: string,
 ): Promise<{ success: boolean; error?: string }> {
   const base = getWorkerUrl()
-  if (!base) return { success: false, error: 'Worker URL not configured' }
+  if (!base) return { success: false, error: 'Worker URL not configured or invalid — check Settings → Cloud Relay' }
 
   try {
     const res = await fetch(`${base}/login`, {
