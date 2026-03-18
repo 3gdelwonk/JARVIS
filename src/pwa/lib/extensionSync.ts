@@ -360,6 +360,34 @@ async function upsertOrderHistory(scrapedOrders: ScrapedOrder[]): Promise<number
         updates.status = 'delivered'
       }
       await db.orders.update(existing.id!, updates)
+
+      // If line items arrived for an existing order that didn't have them yet
+      if (scraped.lineItems && scraped.lineItems.length > 0) {
+        const existingLines = await db.orderLines.where('orderId').equals(existing.id!).count()
+        if (existingLines === 0) {
+          const products = await db.products.toArray()
+          const productMap = new Map(products.map((p) => [p.itemNumber, p]))
+          const orderLines = scraped.lineItems
+            .filter((li) => li.itemNumber)
+            .map((li) => {
+              const product = productMap.get(li.itemNumber!)
+              return {
+                orderId: existing.id!,
+                productId: product?.id ?? 0,
+                itemNumber: li.itemNumber!,
+                productName: li.productName ?? product?.name ?? '',
+                suggestedQty: 0,
+                approvedQty: li.qty,
+                unitPrice: li.price,
+                lineTotal: li.lineTotal || li.qty * li.price,
+              }
+            })
+          if (orderLines.length > 0) {
+            await db.orderLines.bulkAdd(orderLines)
+          }
+        }
+      }
+
       upserted++
     } else {
       const newOrder: Omit<Order, 'id'> = {

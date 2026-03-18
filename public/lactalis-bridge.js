@@ -213,6 +213,294 @@
     }
   }
 
+  // ─── Order history scraping ──────────────────────────────────────────────
+
+  let lastOrderSyncTime = null
+  let orderSyncStats = { total: 0, withDetails: 0 }
+
+  /**
+   * Fetch a single order detail page and parse line items.
+   * Returns array of { itemNumber, productName, qty, price, lineTotal } or null.
+   */
+  async function fetchOrderDetailLines(orderId) {
+    const url = `/customer/order/view/${orderId}`
+    log(`Fetching order detail ${orderId}…`)
+
+    try {
+      const resp = await fetch(url, {
+        credentials: 'include',
+        headers: { 'Accept': 'text/html' },
+      })
+      if (!resp.ok) {
+        log(`Detail ${orderId}: HTTP ${resp.status}`, 'warn')
+        return undefined // not found, but not Incapsula
+      }
+      const html = await resp.text()
+
+      // Incapsula detection — return null to signal "stop fetching"
+      if (html.includes('_Incapsula_') || html.includes('incap_ses')) {
+        log('Incapsula detected — stopping detail fetches', 'error')
+        return null
+      }
+      if (html.length < 500 || (html.includes('login') && html.length < 2000)) {
+        log(`Detail ${orderId}: session expired or empty`, 'warn')
+        return undefined
+      }
+
+      const doc = new DOMParser().parseFromString(html, 'text/html')
+      return parseDetailLineItems(doc)
+    } catch (err) {
+      log(`Detail ${orderId} error: ${err.message}`, 'error')
+      return undefined
+    }
+  }
+
+  /**
+   * Parse line items from an order detail page document.
+   * Handles both table layout (desktop) and mobile vertical layout.
+   */
+  function parseDetailLineItems(doc) {
+    const lines = []
+
+    // Strategy A: Table-based layout (desktop)
+    const tables = doc.querySelectorAll('table')
+    for (const table of tables) {
+      const headers = [...table.querySelectorAll('th, thead td')].map(
+        (th) => (th.innerText ?? th.textContent ?? '').trim().toLowerCase()
+      )
+      const productIdx = headers.findIndex((h) => h.includes('product'))
+      const qtyIdx = headers.findIndex((h) => h.includes('quantity') || h.includes('qty'))
+      if (productIdx < 0 || qtyIdx < 0) continue
+
+      const priceIdx = headers.findIndex((h) => h === 'price' || h.includes('unit price'))
+      const totalIdx = headers.findIndex((h) => h.includes('rtet') || h.includes('line total') || h.includes('subtotal'))
+
+      const rows = table.querySelectorAll('tbody tr')
+      for (const row of rows) {
+        const cells = [...row.querySelectorAll('td')]
+        if (cells.length < 2) continue
+        const productCell = cells[productIdx]
+        const productText = (productCell?.innerText ?? productCell?.textContent ?? '').trim()
+        const itemMatch = productText.match(/item\s*#\s*:?\s*(\d+)/i)
+        const itemNumber = itemMatch ? itemMatch[1] : null
+        const productName = productText.split(/\n/)[0]?.trim() ?? productText
+        const qty = qtyIdx >= 0 ? Number((cells[qtyIdx]?.textContent ?? '').trim()) || 0 : 0
+        const price = priceIdx >= 0 ? parseFloat((cells[priceIdx]?.textContent ?? '').replace(/[$,]/g, '')) || 0 : 0
+        const lineTotal = totalIdx >= 0 ? parseFloat((cells[totalIdx]?.textContent ?? '').replace(/[$,]/g, '')) || 0 : 0
+        if (itemNumber || productName) {
+          lines.push({ itemNumber, productName, qty, price, lineTotal })
+        }
+      }
+      if (lines.length > 0) return lines
+    }
+
+    // Strategy B: Mobile/responsive layout (no table — vertical label:value stacks)
+    const bodyText = (doc.body?.innerText ?? doc.body?.textContent ?? '')
+    const itemsSection = bodyText.split(/ITEMS\s+ORDERED/i)[1]
+    if (itemsSection) {
+      const itemBlocks = itemsSection.split(/(?=Item\s*#\s*:?\s*\d)/i)
+      for (const block of itemBlocks) {
+        const itemMatch = block.match(/Item\s*#\s*:?\s*(\d+)/i)
+        if (!itemMatch) continue
+
+        const itemNumber = itemMatch[1]
+        let productName = ''
+        const nameIdx = block.indexOf(itemMatch[0])
+        if (nameIdx > 0) {
+          productName = block.substring(0, nameIdx).trim().split('\n').pop()?.trim() ?? ''
+        }
+
+        const afterItem = block.substring(block.indexOf(itemMatch[0]) + itemMatch[0].length)
+        const amounts = []
+        const pricePattern = /\$?([\d,]+\.?\d*)/g
+        let match
+        while ((match = pricePattern.exec(afterItem)) !== null) {
+          const val = parseFloat(match[1].replace(/,/g, ''))
+          if (!isNaN(val)) amounts.push(val)
+        }
+
+        const qty = amounts.length > 0 ? amounts[0] : 0
+        const price = amounts.length > 1 ? amounts[1] : 0
+        const lineTotal = amounts.length > 2 ? amounts[amounts.length - 1] : qty * price
+
+        if (itemNumber) {
+          lines.push({ itemNumber, productName, qty, price, lineTotal })
+        }
+      }
+    }
+
+    // Strategy C: Find all "Item #: XXXXX" patterns
+    if (lines.length === 0) {
+      const allText = bodyText
+      const itemPattern = /Item\s*#\s*:?\s*(\d+)/gi
+      let m
+      while ((m = itemPattern.exec(allText)) !== null) {
+        const itemNumber = m[1]
+        const context = allText.substring(m.index - 100, m.index + 200)
+        const contextLines = context.split('\n').map((l) => l.trim()).filter(Boolean)
+        const itemLineIdx = contextLines.findIndex((l) => l.includes(m[0]))
+        let productName = ''
+        if (itemLineIdx > 0) {
+          productName = contextLines[itemLineIdx - 1] || ''
+        }
+        const afterText = context.substring(context.indexOf(m[0]) + m[0].length)
+        const priceAmounts = [...afterText.matchAll(/\$?([\d,]+\.\d{2})/g)].map(
+          (x) => parseFloat(x[1].replace(/,/g, ''))
+        )
+        const qtyMatch = afterText.match(/^\s*(\d+)\s/m)
+        const qty = qtyMatch ? Number(qtyMatch[1]) : 0
+        const price = priceAmounts.length > 0 ? priceAmounts[0] : 0
+        const lineTotal = priceAmounts.length > 1 ? priceAmounts[priceAmounts.length - 1] : qty * price
+        lines.push({ itemNumber, productName, qty, price, lineTotal })
+      }
+    }
+
+    return lines.length > 0 ? lines : null
+  }
+
+  /**
+   * Fetch order history via datagrid API, enrich top 5 with line items,
+   * and push to Worker.
+   */
+  async function fetchAndSyncOrderHistory() {
+    log('Fetching order history…')
+    updateStatus('syncing-orders')
+
+    try {
+      // Fetch order list via OroCommerce datagrid API
+      const gridName = 'frontend-orders-grid-alternative'
+      const url = `/datagrid/${gridName}?${gridName}%5B_pager%5D%5B_page%5D=1&${gridName}%5B_pager%5D%5B_per_page%5D=50`
+
+      const resp = await fetch(url, {
+        credentials: 'include',
+        headers: {
+          'Accept': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+        },
+      })
+
+      if (!resp.ok) {
+        log(`Order grid returned ${resp.status}`, 'error')
+        updateStatus('error')
+        return null
+      }
+
+      const contentType = resp.headers.get('content-type') || ''
+      if (!contentType.includes('json')) {
+        const text = await resp.text()
+        if (text.includes('_Incapsula_') || text.includes('incap_ses')) {
+          log('Incapsula blocked order grid request', 'error')
+        } else if (text.includes('login')) {
+          log('Session expired — please log in again', 'error')
+        } else {
+          log('Order grid returned non-JSON response', 'error')
+        }
+        updateStatus('error')
+        return null
+      }
+
+      const data = await resp.json()
+      const rows = data.data || data.rows || data.results || []
+      if (!Array.isArray(rows) || rows.length === 0) {
+        log('No orders found in datagrid', 'warn')
+        updateStatus('idle')
+        return null
+      }
+
+      // Map datagrid fields to our order format
+      const orders = rows.map((r) => {
+        const orderNumber = r.identifier || r.orderNumber || r.poNumber || r.id || ''
+        const internalId = r.id || r.entityId || r.entity_id || null
+        return {
+          orderNumber: String(orderNumber),
+          internalId: internalId ? String(internalId) : null,
+          createdAt: r.createdAt || r.created_at || r.dateOrdered || null,
+          deliveryDate: r.deliveryDate || r.delivery_date || r.shipDate || null,
+          orderStatus: r.statusName || r.internalStatusName || r.status || null,
+          portalStatus: r.erpOrderStatus || null,
+          refNumber: r.erp_number || r.customerNotes || r.referenceNumber || null,
+          poNumber: r.poNumber || r.po_number || null,
+          totalQty: Number(r.totalQuantity || r.total_quantity || 0) || 0,
+          total: parseFloat(String(r.total || r.grandTotal || r.subtotal || 0).replace(/[$,AUD\s]/g, '')) || 0,
+          onlineOrder: r.onlineOrder ?? r.isOnline ?? null,
+          lineItems: null,
+        }
+      }).filter((o) => o.orderNumber && /\d/.test(o.orderNumber))
+
+      if (orders.length === 0) {
+        log('No valid orders parsed from grid', 'warn')
+        updateStatus('idle')
+        return null
+      }
+
+      log(`Found ${orders.length} orders — fetching details for top 5…`)
+      orderSyncStats.total = orders.length
+
+      // Fetch line items for the most recent 5 orders
+      const MAX_DETAILS = 5
+      const DETAIL_DELAY = 1500
+      let detailCount = 0
+
+      const needsDetails = orders.slice(0, MAX_DETAILS)
+      for (let i = 0; i < needsDetails.length; i++) {
+        const order = needsDetails[i]
+        const id = order.internalId || order.orderNumber
+        if (!id) continue
+
+        const lines = await fetchOrderDetailLines(id)
+        if (lines === null) {
+          // Incapsula — stop
+          break
+        }
+        if (lines && lines.length > 0) {
+          order.lineItems = lines
+          detailCount++
+          if (!order.totalQty) {
+            order.totalQty = lines.reduce((sum, l) => sum + l.qty, 0)
+          }
+          if (!order.total) {
+            order.total = lines.reduce((sum, l) => sum + l.lineTotal, 0)
+          }
+        }
+
+        // Rate limit between detail page fetches
+        if (i < needsDetails.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, DETAIL_DELAY))
+        }
+      }
+
+      orderSyncStats.withDetails = detailCount
+
+      // Push full order history to Worker
+      const payload = {
+        orders,
+        scrapedAt: Date.now(),
+        source: 'bookmarklet_bridge',
+      }
+
+      const result = await workerFetch('/extension/order-history', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      })
+
+      if (result) {
+        log(`Synced ${orders.length} orders (${detailCount} with details)`, 'success')
+        lastOrderSyncTime = new Date()
+        renderOrderHistoryInfo()
+        updateStatus('idle')
+      } else {
+        log('Failed to push order history to Worker', 'error')
+        updateStatus('error')
+      }
+
+      return orders
+    } catch (err) {
+      log(`Order history error: ${err.message}`, 'error')
+      updateStatus('error')
+      return null
+    }
+  }
+
   // ─── Order submission ─────────────────────────────────────────────────────
 
   async function checkPendingOrder() {
@@ -413,11 +701,11 @@
         flex-shrink: 0;
       }
       #status-dot.idle { background: #22c55e; }
-      #status-dot.syncing, #status-dot.submitting { background: #f59e0b; animation: pulse 1s infinite; }
+      #status-dot.syncing, #status-dot.syncing-orders, #status-dot.submitting { background: #f59e0b; animation: pulse 1s infinite; }
       #status-dot.error { background: #ef4444; }
       @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 
-      #schedule-info, #order-info {
+      #schedule-info, #order-info, #order-history-info {
         background: #f9fafb;
         border-radius: 10px;
         padding: 10px 12px;
@@ -425,7 +713,7 @@
         font-size: 13px;
         color: #374151;
       }
-      #schedule-info strong, #order-info strong { color: #1d4ed8; }
+      #schedule-info strong, #order-info strong, #order-history-info strong { color: #1d4ed8; }
 
       .btn {
         display: block;
@@ -483,9 +771,11 @@
         </div>
 
         <div id="schedule-info">No schedule data yet</div>
+        <div id="order-history-info">No order history yet</div>
         <div id="order-info" style="display:none"></div>
 
         <button class="btn btn-primary" id="sync-btn">Sync Schedule</button>
+        <button class="btn btn-primary" id="sync-orders-btn" style="background:#7c3aed">Sync Orders</button>
         <button class="btn btn-secondary" id="order-btn" style="display:none" disabled>Submit Order</button>
 
         <div id="log-area"></div>
@@ -501,6 +791,7 @@
     const labels = {
       idle: lastSyncTime ? `Last sync: ${lastSyncTime.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })}` : 'Ready',
       syncing: 'Syncing schedule…',
+      'syncing-orders': 'Syncing orders…',
       submitting: 'Submitting order…',
       error: 'Error — check log',
     }
@@ -524,6 +815,23 @@
     el.appendChild(document.createTextNode(`Cutoff: ${next.orderCutoffDate} ${next.orderCutoffTime}`))
     el.appendChild(document.createElement('br'))
     el.appendChild(document.createTextNode(`${count} upcoming slot${count !== 1 ? 's' : ''}`))
+  }
+
+  function renderOrderHistoryInfo() {
+    const el = shadow.getElementById('order-history-info')
+    if (!orderSyncStats.total) {
+      el.textContent = 'No order history yet'
+      return
+    }
+    el.innerHTML = ''
+    const strong = document.createElement('strong')
+    strong.textContent = `${orderSyncStats.total} orders`
+    el.appendChild(strong)
+    el.appendChild(document.createTextNode(` synced (${orderSyncStats.withDetails} with details)`))
+    if (lastOrderSyncTime) {
+      el.appendChild(document.createElement('br'))
+      el.appendChild(document.createTextNode(`Last: ${lastOrderSyncTime.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })}`))
+    }
   }
 
   function renderOrderInfo(order) {
@@ -628,6 +936,13 @@
     renderOrderInfo(pendingOrder)
   })
 
+  // Sync orders button
+  shadow.getElementById('sync-orders-btn').addEventListener('click', async () => {
+    shadow.getElementById('sync-orders-btn').disabled = true
+    await fetchAndSyncOrderHistory()
+    shadow.getElementById('sync-orders-btn').disabled = false
+  })
+
   // Submit order button
   shadow.getElementById('order-btn').addEventListener('click', async () => {
     if (!pendingOrder) return
@@ -640,6 +955,7 @@
 
   async function autoRefresh() {
     await fetchAndSyncSchedule()
+    await fetchAndSyncOrderHistory()
     pendingOrder = await checkPendingOrder()
     renderOrderInfo(pendingOrder)
   }

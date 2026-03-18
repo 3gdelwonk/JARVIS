@@ -38,7 +38,7 @@ import { db } from '../lib/db'
 import { generateForecasts, getSettings, type Forecast } from '../lib/forecastEngine'
 import { analyzeHistory } from '../lib/historyAnalyzer'
 import { AVG_DELIVERY_COST, DELIVERY_DAYS, nextDeliveryDate, friendlyError } from '../lib/constants'
-import { getExtensionStatus, triggerScheduleRefresh, fetchCloudSchedule } from '../lib/extensionSync'
+import { getExtensionStatus, triggerScheduleRefresh, triggerOrderHistoryRefresh, fetchCloudSchedule, fetchCloudOrderHistory } from '../lib/extensionSync'
 import type { Order } from '../lib/types'
 
 const STATUS_BADGE: Record<Order['status'], string> = {
@@ -261,13 +261,17 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
 
     if (extStatus?.connected) {
       triggerScheduleRefresh()
+      triggerOrderHistoryRefresh()
       setTimeout(async () => {
         setExtStatus(await getExtensionStatus())
         setRefreshingSchedule(false)
       }, 3000)
     } else {
-      // Try cloud schedule when extension not connected
-      await fetchCloudSchedule()
+      // Try cloud sync when extension not connected (mobile / no extension)
+      await Promise.all([
+        fetchCloudSchedule(),
+        fetchCloudOrderHistory(),
+      ])
       setRefreshingSchedule(false)
     }
   }
@@ -383,6 +387,13 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
                 {extStatus.lactalisLoggedIn ? 'Lactalis live' : 'Extension connected'}
               </span>
             </div>
+          ) : extStatus !== null ? (
+            <div className="flex items-center gap-1.5">
+              <div className="w-1.5 h-1.5 rounded-full bg-gray-300" />
+              <span className="text-[11px] text-gray-400">
+                Cloud mode (no extension)
+              </span>
+            </div>
           ) : (
             <div />
           )}
@@ -392,7 +403,7 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
             className="flex items-center gap-1 text-[11px] text-blue-600 disabled:text-gray-400"
           >
             <RefreshCw size={10} className={refreshingSchedule ? 'animate-spin' : ''} />
-            {extStatus?.connected ? 'Refresh Schedule' : 'Sync from Cloud'}
+            {extStatus?.connected ? 'Refresh Data' : 'Sync from Cloud'}
           </button>
         </div>
 
