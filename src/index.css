@@ -12,5 +12,6 @@ input, textarea, select {
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 .h-screen-safe {
+  height: 100vh;
   height: 100dvh;
 }
