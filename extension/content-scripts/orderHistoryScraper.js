@@ -129,7 +129,7 @@
     console.log(`${LOG} [${label}] First grid row children: ${JSON.stringify(firstRowChildren)}`)
 
     // Try to find cells within grid rows
-    const cellSelectors = ['[class*="cell"]', 'td', '.grid-cell', '> div', '> span']
+    const cellSelectors = ['[class*="cell"]', 'td', '.grid-cell', ':scope > div', ':scope > span']
     let cellSelector = ''
     for (const cs of cellSelectors) {
       const cells = firstRow.querySelectorAll(cs)
