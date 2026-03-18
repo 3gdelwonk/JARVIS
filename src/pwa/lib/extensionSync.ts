@@ -323,34 +323,37 @@ export async function pollOrderStatus(): Promise<{
 }
 
 /**
- * Fetch order history from the Worker (cloud KV cache).
- * Returns number of orders upserted, or 0 if unavailable.
+ * Fetch order history from the Worker (KV cache → live Lactalis fetch).
+ * Returns { count, debug } — count of orders upserted, debug log from Worker.
  */
-export async function fetchCloudOrderHistory(): Promise<number> {
+export async function fetchCloudOrderHistory(): Promise<{ count: number; debug?: string[] }> {
   const base = getWorkerUrl()
   if (!base) {
     console.log('[Milk Manager] No Worker URL configured — skipping cloud order history')
-    return 0
+    return { count: 0 }
   }
 
   try {
     const res = await fetch(`${base}/extension/order-history`, { headers: cloudHeaders() })
     if (!res.ok) {
       console.log(`[Milk Manager] Cloud order history fetch failed: ${res.status}`)
-      return 0
+      return { count: 0, debug: [`HTTP ${res.status}`] }
     }
     const data = await res.json()
+    const debug: string[] = data.debug ?? []
+    if (data.source) debug.unshift(`source: ${data.source}`)
 
     if (!data.orders || !Array.isArray(data.orders) || data.orders.length === 0) {
-      console.log('[Milk Manager] Cloud order history empty')
-      return 0
+      console.log('[Milk Manager] Cloud order history empty', debug)
+      return { count: 0, debug }
     }
 
     console.log(`[Milk Manager] Got ${data.orders.length} orders from cloud`)
-    return upsertOrderHistory(data.orders)
+    const count = await upsertOrderHistory(data.orders)
+    return { count, debug }
   } catch (e) {
     console.log('[Milk Manager] Cloud order history error:', e)
-    return 0
+    return { count: 0, debug: [(e as Error).message] }
   }
 }
 

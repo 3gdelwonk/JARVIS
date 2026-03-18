@@ -101,8 +101,11 @@ export default function SettingsSheet({ onClose }: Props) {
     }
 
     // Cloud sync (works with or without extension)
-    const cloudOrders = await fetchCloudOrderHistory().catch(() => 0)
-    log.push(`Cloud orders: ${cloudOrders} applied`)
+    const orderResult = await fetchCloudOrderHistory().catch(() => ({ count: 0, debug: [] as string[] }))
+    log.push(`Cloud orders: ${orderResult.count} applied`)
+    if (orderResult.debug?.length) {
+      orderResult.debug.forEach((d: string) => log.push(`  → ${d}`))
+    }
 
     const cloudSlots = await fetchCloudSchedule().catch(() => 0)
     log.push(`Cloud schedule: ${cloudSlots} applied`)

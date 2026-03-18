@@ -731,28 +731,29 @@ async function handleExtensionOrderHistoryGet(request: Request, env: Env, origin
 
   // 2. No cache — try live fetch from Lactalis if we have a session
   if (!session) {
-    return jsonResponse({ orders: [], source: 'empty' }, 200, origin, env)
+    return jsonResponse({ orders: [], source: 'empty', debug: 'no-session' }, 200, origin, env)
   }
 
-  const orders = await fetchOrderHistoryFromLactalis(session, env)
+  const { orders, debug } = await fetchOrderHistoryFromLactalis(session, env)
   if (orders.length > 0) {
     // Cache for next time
     const payload = { orders, scrapedAt: Date.now() }
     await env.SESSIONS.put('order-history:latest', JSON.stringify(payload), {
       expirationTtl: 86400,
     })
-    return jsonResponse({ ...payload, source: 'live' }, 200, origin, env)
+    return jsonResponse({ ...payload, source: 'live', debug }, 200, origin, env)
   }
 
-  return jsonResponse({ orders: [], source: 'empty' }, 200, origin, env)
+  return jsonResponse({ orders: [], source: 'empty', debug }, 200, origin, env)
 }
 
 /** Fetch order history from Lactalis OroCommerce datagrid API using session cookies. */
 async function fetchOrderHistoryFromLactalis(
   session: SessionData,
   env: Env,
-): Promise<Array<Record<string, unknown>>> {
+): Promise<{ orders: Array<Record<string, unknown>>; debug: string[] }> {
   const base = env.LACTALIS_BASE
+  const debug: string[] = []
   const gridNames = [
     'frontend-orders-grid-alternative',
     'frontend-customer-user-orders-grid',
@@ -773,9 +774,17 @@ async function fetchOrderHistoryFromLactalis(
         },
       })
 
-      if (!res.ok) continue
+      if (!res.ok) {
+        debug.push(`${gridName}: HTTP ${res.status}`)
+        continue
+      }
       const contentType = res.headers.get('Content-Type') ?? ''
-      if (!contentType.includes('json')) continue
+      if (!contentType.includes('json')) {
+        const body = await res.text()
+        const blocked = isIncapsulaBlocked(body)
+        debug.push(`${gridName}: not JSON (${contentType.slice(0, 40)})${blocked ? ' [INCAPSULA]' : ''}, ${body.length} chars`)
+        continue
+      }
 
       const data = await res.json() as {
         data?: Array<Record<string, unknown>>
@@ -783,7 +792,12 @@ async function fetchOrderHistoryFromLactalis(
         results?: Array<Record<string, unknown>>
       }
       const rows = data.data ?? data.rows ?? data.results ?? []
-      if (!Array.isArray(rows) || rows.length === 0) continue
+      if (!Array.isArray(rows) || rows.length === 0) {
+        debug.push(`${gridName}: JSON OK but 0 rows, keys: ${Object.keys(data).join(',')}`)
+        continue
+      }
+
+      debug.push(`${gridName}: ${rows.length} rows, first keys: ${Object.keys(rows[0]).join(',')}`)
 
       // Map to ScrapedOrder format (same as extension orderHistoryScraper.js)
       const orders = rows
@@ -803,8 +817,9 @@ async function fetchOrderHistoryFromLactalis(
         })
         .filter(Boolean)
 
-      if (orders.length > 0) return orders
-    } catch {
+      if (orders.length > 0) return { orders, debug }
+    } catch (e) {
+      debug.push(`${gridName}: error ${(e as Error).message}`)
       continue
     }
   }
@@ -818,14 +833,27 @@ async function fetchOrderHistoryFromLactalis(
         'Accept': 'text/html',
       },
     })
-    if (!res.ok) return []
+    if (!res.ok) {
+      debug.push(`html-fallback: HTTP ${res.status}`)
+      return { orders: [], debug }
+    }
     const html = await res.text()
-    if (isIncapsulaBlocked(html)) return []
-    if (html.includes('login') && html.length < 2000) return []
+    if (isIncapsulaBlocked(html)) {
+      debug.push(`html-fallback: INCAPSULA blocked (${html.length} chars)`)
+      return { orders: [], debug }
+    }
+    if (html.includes('login') && html.length < 2000) {
+      debug.push(`html-fallback: login redirect (${html.length} chars)`)
+      return { orders: [], debug }
+    }
 
-    return parseOrderHistoryHtml(html)
-  } catch {
-    return []
+    debug.push(`html-fallback: ${html.length} chars`)
+    const orders = parseOrderHistoryHtml(html)
+    debug.push(`html-fallback: parsed ${orders.length} orders`)
+    return { orders, debug }
+  } catch (e) {
+    debug.push(`html-fallback: error ${(e as Error).message}`)
+    return { orders: [], debug }
   }
 }
 
