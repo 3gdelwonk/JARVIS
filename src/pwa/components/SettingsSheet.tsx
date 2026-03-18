@@ -469,12 +469,12 @@ export default function SettingsSheet({ onClose }: Props) {
             ) : (
               <div className="space-y-2">
                 <input
-                  type="email"
-                  placeholder="Lactalis email"
+                  type="text"
+                  placeholder="Lactalis username or email"
                   value={lactalisUser}
                   onChange={(e) => setLactalisUser(e.target.value)}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                  autoComplete="email"
+                  autoComplete="username"
                 />
                 <input
                   type="password"
