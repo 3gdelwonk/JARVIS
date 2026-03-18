@@ -437,7 +437,9 @@ export default function SettingsSheet({ onClose }: Props) {
             />
             <button
               onClick={() => {
-                localStorage.setItem('milk-manager-worker-url', workerUrl.trim())
+                const cleaned = workerUrl.replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').trim()
+                localStorage.setItem('milk-manager-worker-url', cleaned)
+                setWorkerUrl(cleaned)
                 setWorkerUrlSaved(true)
                 setTimeout(() => setWorkerUrlSaved(false), 2000)
               }}
