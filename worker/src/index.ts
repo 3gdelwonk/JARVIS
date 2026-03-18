@@ -729,12 +729,14 @@ async function handleExtensionOrderHistoryGet(request: Request, env: Env, origin
     }
   }
 
-  // 2. No cache — try live fetch from Lactalis if we have a session
-  if (!session) {
-    return jsonResponse({ orders: [], source: 'empty', debug: 'no-session' }, 200, origin, env)
+  // 2. No cache — try live fetch from Lactalis
+  // Build a session from whatever cookies we have (login session + extension-pushed cookies)
+  const effectiveSession = session ?? await buildSessionFromExtensionCookies(env)
+  if (!effectiveSession) {
+    return jsonResponse({ orders: [], source: 'empty', debug: 'no-session-no-cookies' }, 200, origin, env)
   }
 
-  const { orders, debug } = await fetchOrderHistoryFromLactalis(session, env)
+  const { orders, debug } = await fetchOrderHistoryFromLactalis(effectiveSession, env)
   if (orders.length > 0) {
     // Cache for next time
     const payload = { orders, scrapedAt: Date.now() }
@@ -745,6 +747,13 @@ async function handleExtensionOrderHistoryGet(request: Request, env: Env, origin
   }
 
   return jsonResponse({ orders: [], source: 'empty', debug }, 200, origin, env)
+}
+
+/** Build a synthetic session from extension-pushed cookies when no login session exists. */
+async function buildSessionFromExtensionCookies(env: Env): Promise<SessionData | null> {
+  const cookies = await env.SESSIONS.get('cookies:lactalis')
+  if (!cookies) return null
+  return { cookies, expiresAt: Date.now() + 3600_000 } // treat as 1h session
 }
 
 /** Merge session cookies with extension-pushed browser cookies (which include Incapsula tokens). */
