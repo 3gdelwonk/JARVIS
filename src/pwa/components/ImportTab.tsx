@@ -1,10 +1,10 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, useEffect } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import {
   Upload, FileSpreadsheet, AlertTriangle, CheckCircle,
   Clock, ChevronDown, ChevronUp, FileText, Eye, Save, Package, Database, Mail, RefreshCw,
 } from 'lucide-react'
-import { connectGmail, disconnectGmail, isGmailConnected, syncGmailOrders, getGmailLastSync } from '../lib/gmailSync'
+import { connectGmail, disconnectGmail, isGmailConnected, syncGmailOrders, getGmailLastSync, prepareGmailClient } from '../lib/gmailSync'
 import {
   detectReportType,
   parseItemMaintenance,
@@ -693,6 +693,9 @@ function InvoiceSection() {
 function GmailSection() {
   const [connected, setConnected] = useState(isGmailConnected)
   const [email, setEmail] = useState<string | null>(null)
+
+  // Pre-load GIS + token client so requestAccessToken() fires synchronously on tap (mobile fix)
+  useEffect(() => { prepareGmailClient().catch(console.warn) }, [])
   const [syncing, setSyncing] = useState(false)
   const [connecting, setConnecting] = useState(false)
   const [lastSync, setLastSync] = useState<string | null>(getGmailLastSync)
