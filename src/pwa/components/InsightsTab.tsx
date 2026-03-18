@@ -19,12 +19,13 @@ const API_KEY_STORAGE = 'milk-manager-claude-key'
 // ─── Data context builder ─────────────────────────────────────────────────────
 
 async function buildContext(): Promise<string> {
-  const [products, allSnapshots, invoiceLines, wasteLog, orders, orderLines] =
+  const [products, allSnapshots, invoiceLines, wasteLog, claimRecords, orders, orderLines] =
     await Promise.all([
       db.products.toArray(),
       db.stockSnapshots.toArray(),
       db.invoiceLines.toArray(),
       db.wasteLog.toArray(),
+      db.claimRecords.toArray(),
       db.orders.toArray(),
       db.orderLines.toArray(),
     ])
@@ -74,6 +75,20 @@ async function buildContext(): Promise<string> {
           .map((w) => `${w.wastedDate}: ${w.productName} ×${w.quantity} — ${w.reason}${w.notes ? ` (${w.notes})` : ''}`)
           .join('\n')
 
+  // Claims summary (last 30 entries)
+  const claimRows =
+    claimRecords.length === 0
+      ? 'None recorded'
+      : [...claimRecords]
+          .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+          .slice(-30)
+          .map((c) => {
+            const sent = c.emailSentAt ? `emailed ${c.emailSentAt}` : 'NOT YET EMAILED'
+            const ref = c.invoiceRef ? ` | inv ${c.invoiceRef}` : ''
+            return `${c.createdAt}: ${c.productName} ×${c.quantity} — ${c.claimType}${ref} | ${sent} | ${c.description}`
+          })
+          .join('\n')
+
   // Orders summary (last 10)
   const recentOrders = [...orders]
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
@@ -101,10 +116,13 @@ ${productRows}
 === WASTE LOG (last 30) ===
 ${wasteRows}
 
+=== CLAIMS (last 30) ===
+${claimRows}
+
 === RECENT ORDERS (last 10) ===
 ${orderRows}
 
-Invoice history covers last 90 days. Use the data above to answer questions accurately. When you don't have enough data, say so clearly. All prices are in AUD.`
+Invoice history covers last 90 days. Claims marked "NOT YET EMAILED" have not been sent to Lactalis. Use the data above to answer questions accurately. When you don't have enough data, say so clearly. All prices are in AUD.`
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -176,7 +194,7 @@ const SUGGESTIONS = [
   'Which products should I order more of this week?',
   'How much waste have I had in the last month?',
   'Which products are performing best by margin?',
-  'Should I remove any low-performing products?',
+  'Do I have any outstanding claims not yet emailed?',
   'How did flavoured milk perform last 2 months?',
 ]
 
