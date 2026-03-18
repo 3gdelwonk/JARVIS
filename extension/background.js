@@ -119,10 +119,15 @@ async function cloudPushOrderResult(submission) {
 // ─── Cloud: push order history to KV ─────────────────────────────────────
 
 async function cloudPushOrderHistory(orderHistory) {
-  await cloudFetch('/extension/order-history', {
+  const result = await cloudFetch('/extension/order-history', {
     method: 'POST',
     body: JSON.stringify(orderHistory),
   })
+  if (result) {
+    console.log('[Cloud] Order history pushed:', orderHistory?.orders?.length ?? 0, 'orders')
+  } else {
+    console.warn('[Cloud] Order history push failed')
+  }
 }
 
 // ─── Cloud: push cookies to KV ───────────────────────────────────────────────
