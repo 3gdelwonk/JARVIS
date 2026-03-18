@@ -747,6 +747,24 @@ async function handleExtensionOrderHistoryGet(request: Request, env: Env, origin
   return jsonResponse({ orders: [], source: 'empty', debug }, 200, origin, env)
 }
 
+/** Merge session cookies with extension-pushed browser cookies (which include Incapsula tokens). */
+async function getEnrichedCookies(session: SessionData, env: Env): Promise<string> {
+  const extensionCookies = await env.SESSIONS.get('cookies:lactalis')
+  if (!extensionCookies) return session.cookies
+
+  // Merge: extension cookies first (have Incapsula tokens), session cookies override for auth
+  const cookieMap = new Map<string, string>()
+  for (const c of extensionCookies.split(';')) {
+    const eq = c.indexOf('=')
+    if (eq > 0) cookieMap.set(c.slice(0, eq).trim(), c.slice(eq + 1).trim())
+  }
+  for (const c of session.cookies.split(';')) {
+    const eq = c.indexOf('=')
+    if (eq > 0) cookieMap.set(c.slice(0, eq).trim(), c.slice(eq + 1).trim())
+  }
+  return Array.from(cookieMap.entries()).map(([k, v]) => `${k}=${v}`).join('; ')
+}
+
 /** Fetch order history from Lactalis OroCommerce datagrid API using session cookies. */
 async function fetchOrderHistoryFromLactalis(
   session: SessionData,
@@ -754,6 +772,12 @@ async function fetchOrderHistoryFromLactalis(
 ): Promise<{ orders: Array<Record<string, unknown>>; debug: string[] }> {
   const base = env.LACTALIS_BASE
   const debug: string[] = []
+
+  // Merge session cookies with extension-pushed cookies (Incapsula tokens)
+  const cookies = await getEnrichedCookies(session, env)
+  const hasExtCookies = cookies !== session.cookies
+  debug.push(hasExtCookies ? 'using merged cookies (ext+session)' : 'using session cookies only')
+
   const gridNames = [
     'frontend-orders-grid-alternative',
     'frontend-customer-user-orders-grid',
@@ -767,7 +791,7 @@ async function fetchOrderHistoryFromLactalis(
       const url = `${base}/datagrid/${gridName}?${encodeURIComponent(gridName)}%5B_pager%5D%5B_page%5D=1&${encodeURIComponent(gridName)}%5B_pager%5D%5B_per_page%5D=50`
       const res = await proxyFetch(url, {
         headers: {
-          'Cookie': session.cookies,
+          'Cookie': cookies,
           'User-Agent': 'Mozilla/5.0',
           'Accept': 'application/json',
           'X-Requested-With': 'XMLHttpRequest',
@@ -828,7 +852,7 @@ async function fetchOrderHistoryFromLactalis(
   try {
     const res = await proxyFetch(`${base}/customer/order/`, {
       headers: {
-        'Cookie': session.cookies,
+        'Cookie': cookies,
         'User-Agent': 'Mozilla/5.0',
         'Accept': 'text/html',
       },
