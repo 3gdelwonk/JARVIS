@@ -95,6 +95,112 @@
     return idx
   }
 
+  // ─── Div-grid parser (OroCommerce datagrid without <table>) ───────────────
+
+  function scrapeGridRows(doc, label) {
+    // Try various selectors for OroCommerce div-based grids
+    const selectors = [
+      '.oro-datagrid .grid-body .grid-row',
+      '[class*="grid"] [class*="row"]',
+      '.grid-body tr',
+      '.oro-datagrid tbody tr',
+    ]
+
+    let gridRows = []
+    let usedSelector = ''
+    for (const sel of selectors) {
+      const rows = doc.querySelectorAll(sel)
+      if (rows.length > 0) {
+        gridRows = [...rows]
+        usedSelector = sel
+        break
+      }
+    }
+
+    console.log(`${LOG} [${label}] Grid rows: ${gridRows.length} (selector: ${usedSelector || 'none'})`)
+    if (gridRows.length === 0) return []
+
+    // Log first row for debugging
+    const firstRow = gridRows[0]
+    const firstRowText = (firstRow.innerText ?? firstRow.textContent ?? '').trim()
+    console.log(`${LOG} [${label}] First grid row text: "${firstRowText.slice(0, 200)}"`)
+    console.log(`${LOG} [${label}] First grid row classes: "${firstRow.className}"`)
+    const firstRowChildren = [...firstRow.children].map(c => `${c.tagName}.${c.className?.split(' ')[0] || ''}`)
+    console.log(`${LOG} [${label}] First grid row children: ${JSON.stringify(firstRowChildren)}`)
+
+    // Try to find cells within grid rows
+    const cellSelectors = ['[class*="cell"]', 'td', '.grid-cell', '> div', '> span']
+    let cellSelector = ''
+    for (const cs of cellSelectors) {
+      const cells = firstRow.querySelectorAll(cs)
+      if (cells.length >= 3) {
+        cellSelector = cs
+        console.log(`${LOG} [${label}] Using cell selector "${cs}" (${cells.length} cells)`)
+        break
+      }
+    }
+
+    const orders = []
+
+    for (const row of gridRows) {
+      const rowText = (row.innerText ?? row.textContent ?? '').trim()
+      if (!rowText || rowText.length < 5) continue
+
+      let cells = []
+      if (cellSelector) {
+        cells = [...row.querySelectorAll(cellSelector)].map(c => (c.innerText ?? c.textContent ?? '').trim())
+      }
+
+      // Strategy A: extract from cells if we have them
+      if (cells.length >= 3) {
+        const orderNumber = cells.find(c => /^\d{5,}$/.test(c.replace(/^#\s*/, '')))
+        if (orderNumber) {
+          const dates = [...rowText.matchAll(/(\d{1,2}\/\d{1,2}\/\d{4})/g)].map(m => m[1])
+          const amounts = [...rowText.matchAll(/\$[\d,]+\.?\d*/g)].map(m => parseFloat(m[0].replace(/[$,]/g, '')) || 0)
+          const statusWords = ['Delivered', 'Closed', 'Open', 'Created', 'Shipped', 'Processing', 'Cancelled', 'Complete']
+          const status = statusWords.find(s => rowText.includes(s)) || null
+
+          orders.push({
+            orderNumber: orderNumber.replace(/^#\s*/, ''),
+            internalId: null,
+            createdAt: dates.length > 0 ? parseAUDateTime(dates[0]) : null,
+            deliveryDate: dates.length > 1 ? parseAUDate(dates[1]) : null,
+            orderStatus: status,
+            refNumber: null,
+            totalQty: 0,
+            total: amounts.length > 0 ? amounts[amounts.length - 1] : 0,
+            onlineOrder: null,
+          })
+          continue
+        }
+      }
+
+      // Strategy B: extract from raw row text
+      const numMatch = rowText.match(/\b(\d{6,})\b/)
+      if (numMatch) {
+        const dates = [...rowText.matchAll(/(\d{1,2}\/\d{1,2}\/\d{4})/g)].map(m => m[1])
+        const amounts = [...rowText.matchAll(/\$[\d,]+\.?\d*/g)].map(m => parseFloat(m[0].replace(/[$,]/g, '')) || 0)
+        const statusWords = ['Delivered', 'Closed', 'Open', 'Created', 'Shipped', 'Processing', 'Cancelled', 'Complete']
+        const status = statusWords.find(s => rowText.includes(s)) || null
+
+        orders.push({
+          orderNumber: numMatch[1],
+          internalId: null,
+          createdAt: dates.length > 0 ? parseAUDateTime(dates[0]) : null,
+          deliveryDate: dates.length > 1 ? parseAUDate(dates[1]) : null,
+          orderStatus: status,
+          refNumber: null,
+          totalQty: 0,
+          total: amounts.length > 0 ? amounts[amounts.length - 1] : 0,
+          onlineOrder: null,
+        })
+      }
+    }
+
+    console.log(`${LOG} [${label}] Grid scrape extracted ${orders.length} orders`)
+    return orders
+  }
+
   // ─── Table parser (works on any Document/Element) ─────────────────────────
 
   function scrapeOrderListFromDoc(doc, label) {
@@ -102,9 +208,9 @@
     console.log(`${LOG} [${label}] Tables found: ${tables.length}`)
 
     if (tables.length === 0) {
-      // Also check for grid/div-based layouts
-      const gridRows = doc.querySelectorAll('[class*="grid"] [class*="row"], .oro-datagrid tbody tr, .grid-body tr')
-      console.log(`${LOG} [${label}] Grid rows found: ${gridRows.length}`)
+      // Try div-based grid layouts (OroCommerce datagrid)
+      const gridOrders = scrapeGridRows(doc, label)
+      if (gridOrders.length > 0) return gridOrders
       return []
     }
 
