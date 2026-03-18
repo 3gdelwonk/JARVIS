@@ -804,6 +804,7 @@ async function fetchOrderHistoryFromLactalis(
           'User-Agent': 'Mozilla/5.0',
           'Accept': 'application/json',
           'X-Requested-With': 'XMLHttpRequest',
+          'Referer': `${base}/customer/order/`,
         },
       })
 
@@ -815,7 +816,10 @@ async function fetchOrderHistoryFromLactalis(
       if (!contentType.includes('json')) {
         const body = await res.text()
         const blocked = isIncapsulaBlocked(body)
-        debug.push(`${gridName}: not JSON (${contentType.slice(0, 40)})${blocked ? ' [INCAPSULA]' : ''}, ${body.length} chars`)
+        const title = body.match(/<title>([^<]*)<\/title>/i)?.[1] ?? ''
+        const isLogin = body.includes('/login') && body.length < 5000
+        const snippet = body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120)
+        debug.push(`${gridName}: not JSON${blocked ? ' [INCAPSULA]' : ''}${isLogin ? ' [LOGIN-REDIRECT]' : ''}, ${body.length}ch, title="${title}", snippet="${snippet}"`)
         continue
       }
 
@@ -864,6 +868,7 @@ async function fetchOrderHistoryFromLactalis(
         'Cookie': cookies,
         'User-Agent': 'Mozilla/5.0',
         'Accept': 'text/html',
+        'Referer': `${base}/customer/`,
       },
     })
     if (!res.ok) {
