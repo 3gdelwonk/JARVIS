@@ -162,8 +162,78 @@ export function triggerOrderSubmit() {
 
 // ─── Cloud relay functions (via Cloudflare Worker) ──────────────────────────
 
+const CLOUD_TOKEN_KEY = 'milk-manager-cloud-token'
+const CLOUD_TOKEN_EXPIRY_KEY = 'milk-manager-cloud-token-expiry'
+
 function getWorkerUrl(): string | null {
   return localStorage.getItem('milk-manager-worker-url')?.replace(/\/+$/, '') || null
+}
+
+function getCloudToken(): string | null {
+  const token = localStorage.getItem(CLOUD_TOKEN_KEY)
+  const expiry = localStorage.getItem(CLOUD_TOKEN_EXPIRY_KEY)
+  if (!token) return null
+  // Check if token has expired
+  if (expiry && Date.now() > Number(expiry)) {
+    localStorage.removeItem(CLOUD_TOKEN_KEY)
+    localStorage.removeItem(CLOUD_TOKEN_EXPIRY_KEY)
+    return null
+  }
+  return token
+}
+
+function cloudHeaders(): Record<string, string> {
+  const token = getCloudToken()
+  return token ? { 'Authorization': `Bearer ${token}` } : {}
+}
+
+/**
+ * Authenticate with Lactalis via the Worker's /login endpoint.
+ * Stores the session token in localStorage for subsequent cloud calls.
+ * Returns { success, error? }.
+ */
+export async function loginToCloud(
+  username: string,
+  password: string,
+): Promise<{ success: boolean; error?: string }> {
+  const base = getWorkerUrl()
+  if (!base) return { success: false, error: 'Worker URL not configured' }
+
+  try {
+    const res = await fetch(`${base}/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    })
+    const data = await res.json()
+
+    if (!res.ok) {
+      return { success: false, error: data.error || `Login failed (${res.status})` }
+    }
+
+    if (data.sessionToken) {
+      localStorage.setItem(CLOUD_TOKEN_KEY, data.sessionToken)
+      if (data.expiresAt) {
+        localStorage.setItem(CLOUD_TOKEN_EXPIRY_KEY, String(data.expiresAt))
+      }
+      return { success: true }
+    }
+
+    return { success: false, error: 'No session token in response' }
+  } catch (e) {
+    return { success: false, error: (e as Error).message }
+  }
+}
+
+/** Check whether a cloud session token exists and isn't expired. */
+export function isCloudLoggedIn(): boolean {
+  return getCloudToken() !== null
+}
+
+/** Clear the stored cloud session token. */
+export function cloudLogout(): void {
+  localStorage.removeItem(CLOUD_TOKEN_KEY)
+  localStorage.removeItem(CLOUD_TOKEN_EXPIRY_KEY)
 }
 
 /**
@@ -175,7 +245,7 @@ export async function fetchCloudSchedule(): Promise<number> {
   if (!base) return 0
 
   try {
-    const res = await fetch(`${base}/schedule`)
+    const res = await fetch(`${base}/schedule`, { headers: cloudHeaders() })
     if (!res.ok) return 0
     const data = await res.json()
 
@@ -203,7 +273,7 @@ export async function submitOrderViaCloud(
 
   const res = await fetch(`${base}/submit-order`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...cloudHeaders() },
     body: JSON.stringify({ lines }),
   })
 
@@ -234,7 +304,7 @@ export async function pollOrderStatus(): Promise<{
   if (!base) return null
 
   try {
-    const res = await fetch(`${base}/extension/order-status`)
+    const res = await fetch(`${base}/extension/order-status`, { headers: cloudHeaders() })
     if (!res.ok) return null
     return res.json()
   } catch {
@@ -254,7 +324,7 @@ export async function fetchCloudOrderHistory(): Promise<number> {
   }
 
   try {
-    const res = await fetch(`${base}/extension/order-history`)
+    const res = await fetch(`${base}/extension/order-history`, { headers: cloudHeaders() })
     if (!res.ok) {
       console.log(`[Milk Manager] Cloud order history fetch failed: ${res.status}`)
       return 0

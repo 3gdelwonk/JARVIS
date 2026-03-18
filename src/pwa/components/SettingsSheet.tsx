@@ -17,7 +17,7 @@ import {
   type ForecastSettings,
 } from '../lib/forecastEngine'
 import { exportAllData, downloadBackup, importAllData } from '../lib/dataExport'
-import { applyOrderHistory, applyExtensionSchedule, fetchCloudOrderHistory, fetchCloudSchedule, getExtensionStatus, triggerOrderHistoryRefresh, triggerScheduleRefresh } from '../lib/extensionSync'
+import { applyOrderHistory, applyExtensionSchedule, fetchCloudOrderHistory, fetchCloudSchedule, getExtensionStatus, triggerOrderHistoryRefresh, triggerScheduleRefresh, loginToCloud, isCloudLoggedIn, cloudLogout } from '../lib/extensionSync'
 import { db } from '../lib/db'
 
 interface Props {
@@ -43,6 +43,13 @@ export default function SettingsSheet({ onClose }: Props) {
   const [extSecret, setExtSecret] = useState(() => localStorage.getItem('milk-manager-ext-secret') ?? '')
   const [extSecretSaved, setExtSecretSaved] = useState(false)
   const [bookmarkletCopied, setBookmarkletCopied] = useState(false)
+
+  // Cloud login
+  const [lactalisUser, setLactalisUser] = useState('')
+  const [lactalisPass, setLactalisPass] = useState('')
+  const [cloudLoggedIn, setCloudLoggedIn] = useState(() => isCloudLoggedIn())
+  const [loginStatus, setLoginStatus] = useState<string | null>(null)
+  const [loggingIn, setLoggingIn] = useState(false)
 
   // Sync status
   const [syncLog, setSyncLog] = useState<string[]>([])
@@ -438,6 +445,75 @@ export default function SettingsSheet({ onClose }: Props) {
             >
               {workerUrlSaved ? 'Saved' : 'Save Worker URL'}
             </button>
+          </div>
+
+          {/* Lactalis Cloud Login */}
+          <div className="border-t border-gray-100 pt-4">
+            <p className="text-sm font-medium text-gray-700 mb-0.5">Lactalis Cloud Login</p>
+            <p className="text-[11px] text-gray-400 mb-2">
+              Login to sync schedule and orders directly from your phone — no extension needed.
+            </p>
+            {cloudLoggedIn ? (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-sm text-green-600 font-medium">
+                  <span className="w-2 h-2 bg-green-500 rounded-full" />
+                  Cloud session active
+                </div>
+                <button
+                  onClick={() => { cloudLogout(); setCloudLoggedIn(false); setLoginStatus(null) }}
+                  className="w-full py-2 border border-red-200 text-red-600 text-sm font-medium rounded-lg"
+                >
+                  Logout
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <input
+                  type="email"
+                  placeholder="Lactalis email"
+                  value={lactalisUser}
+                  onChange={(e) => setLactalisUser(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  autoComplete="email"
+                />
+                <input
+                  type="password"
+                  placeholder="Password"
+                  value={lactalisPass}
+                  onChange={(e) => setLactalisPass(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  autoComplete="current-password"
+                />
+                <button
+                  onClick={async () => {
+                    if (!workerUrl.trim()) {
+                      setLoginStatus('Set Worker URL first')
+                      return
+                    }
+                    setLoggingIn(true)
+                    setLoginStatus(null)
+                    const result = await loginToCloud(lactalisUser.trim(), lactalisPass)
+                    setLoggingIn(false)
+                    if (result.success) {
+                      setCloudLoggedIn(true)
+                      setLoginStatus('Logged in')
+                      setLactalisPass('')
+                    } else {
+                      setLoginStatus(result.error ?? 'Login failed')
+                    }
+                  }}
+                  disabled={!lactalisUser.trim() || !lactalisPass || loggingIn}
+                  className="w-full py-2 bg-blue-600 text-white text-sm font-medium rounded-lg disabled:opacity-40"
+                >
+                  {loggingIn ? 'Logging in...' : 'Login to Lactalis'}
+                </button>
+              </div>
+            )}
+            {loginStatus && (
+              <p className={`text-[11px] mt-1.5 ${loginStatus === 'Logged in' ? 'text-green-600' : 'text-red-500'}`}>
+                {loginStatus}
+              </p>
+            )}
           </div>
 
           {/* Lactalis Bookmarklet */}

@@ -8,12 +8,14 @@
  *   GET  /debug-login    — diagnostic: shows what the login page looks like
  *   GET  /health         — simple liveness check
  *
- * Extension cloud sync routes (auth'd with EXTENSION_SECRET):
- *   POST /extension/schedule      — extension pushes scraped schedule → KV
- *   GET  /extension/pending-order — extension polls for pending orders
- *   POST /extension/order-result  — extension pushes submission result
- *   POST /extension/cookies       — extension pushes Lactalis cookies
- *   GET  /extension/order-status  — PWA polls for order completion (no auth)
+ * Extension cloud sync routes (auth'd with EXTENSION_SECRET or session token):
+ *   POST /extension/schedule       — extension pushes scraped schedule → KV
+ *   GET  /extension/pending-order  — extension polls for pending orders
+ *   POST /extension/order-result   — extension pushes submission result
+ *   POST /extension/cookies        — extension pushes Lactalis cookies
+ *   POST /extension/order-history  — extension pushes scraped order history → KV
+ *   GET  /extension/order-history  — PWA fetches cached order history from KV
+ *   GET  /extension/order-status   — PWA polls for order completion
  *
  * Auth: PWA sends `Authorization: Bearer <sessionToken>` for protected routes.
  * The Worker stores Lactalis session cookies in KV, keyed by sessionToken.
@@ -689,6 +691,43 @@ async function handleExtensionCookies(request: Request, env: Env, origin: string
   return jsonResponse({ ok: true }, 200, origin, env)
 }
 
+/** POST /extension/order-history — extension pushes scraped order history to KV */
+async function handleExtensionOrderHistoryPush(request: Request, env: Env, origin: string): Promise<Response> {
+  if (!isExtensionAuthed(request, env)) {
+    return jsonResponse({ error: 'Unauthorized' }, 401, origin, env)
+  }
+  let body: unknown
+  try {
+    body = await request.json()
+  } catch {
+    return jsonResponse({ error: 'Invalid JSON' }, 400, origin, env)
+  }
+  await env.SESSIONS.put('order-history:latest', JSON.stringify(body), {
+    expirationTtl: 86400, // 24h TTL
+  })
+  return jsonResponse({ ok: true }, 200, origin, env)
+}
+
+/** GET /extension/order-history — PWA fetches cached order history from KV */
+async function handleExtensionOrderHistoryGet(request: Request, env: Env, origin: string): Promise<Response> {
+  // Allow either a valid session token or extension secret
+  const token = bearerToken(request)
+  const session = await getSession(token, env)
+  if (!session && !isExtensionAuthed(request, env)) {
+    return jsonResponse({ error: 'Unauthorized' }, 401, origin, env)
+  }
+  const raw = await env.SESSIONS.get('order-history:latest')
+  if (!raw) {
+    return jsonResponse({ orders: [] }, 200, origin, env)
+  }
+  try {
+    const data = JSON.parse(raw)
+    return jsonResponse(data, 200, origin, env)
+  } catch {
+    return jsonResponse({ orders: [] }, 200, origin, env)
+  }
+}
+
 /** GET /extension/order-status — PWA polls for order completion */
 async function handleExtensionOrderStatus(request: Request, env: Env, origin: string): Promise<Response> {
   // Require either a valid session token or extension secret
@@ -768,6 +807,11 @@ export default {
         case '/extension/cookies':
           if (request.method !== 'POST') break
           return handleExtensionCookies(request, env, origin)
+
+        case '/extension/order-history':
+          if (request.method === 'POST') return handleExtensionOrderHistoryPush(request, env, origin)
+          if (request.method === 'GET') return handleExtensionOrderHistoryGet(request, env, origin)
+          break
 
         case '/extension/order-status':
           if (request.method !== 'GET') break
