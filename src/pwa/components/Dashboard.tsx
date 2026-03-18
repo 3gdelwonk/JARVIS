@@ -38,7 +38,7 @@ import { db } from '../lib/db'
 import { generateForecasts, getSettings, type Forecast } from '../lib/forecastEngine'
 import { analyzeHistory } from '../lib/historyAnalyzer'
 import { AVG_DELIVERY_COST, DELIVERY_DAYS, nextDeliveryDate, friendlyError } from '../lib/constants'
-import { getExtensionStatus, triggerScheduleRefresh, triggerOrderHistoryRefresh, fetchCloudSchedule, fetchCloudOrderHistory } from '../lib/extensionSync'
+import { getExtensionStatus, triggerScheduleRefresh, fetchCloudSchedule } from '../lib/extensionSync'
 import type { Order } from '../lib/types'
 
 const STATUS_BADGE: Record<Order['status'], string> = {
@@ -261,17 +261,13 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
 
     if (extStatus?.connected) {
       triggerScheduleRefresh()
-      triggerOrderHistoryRefresh()
       setTimeout(async () => {
         setExtStatus(await getExtensionStatus())
         setRefreshingSchedule(false)
       }, 3000)
     } else {
       // Try cloud sync when extension not connected (mobile / no extension)
-      await Promise.all([
-        fetchCloudSchedule(),
-        fetchCloudOrderHistory(),
-      ])
+      await fetchCloudSchedule()
       setRefreshingSchedule(false)
     }
   }

@@ -159,3 +159,31 @@ export interface PhotoRecord {
   capturedAt: string;     // ISO datetime
   notes?: string;
 }
+
+export interface ScrapedOrder {
+  orderNumber: string;
+  createdAt: string | null;     // ISO datetime
+  deliveryDate: string | null;  // YYYY-MM-DD
+  orderStatus: string | null;
+  refNumber?: string | null;
+  totalQty: number;
+  total: number;
+  onlineOrder?: boolean | null;
+  lineItems?: Array<{
+    itemNumber: string | null;
+    productName: string;
+    qty: number;
+    price: number;
+    lineTotal: number;
+  }>;
+}
+
+export interface GmailSyncRecord {
+  id?: number;
+  messageId: string;      // Gmail message ID (unique index)
+  syncedAt: Date;
+  parsed: boolean;
+  subject: string;
+  orderNumber?: string;
+  parseError?: string;
+}

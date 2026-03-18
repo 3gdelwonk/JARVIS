@@ -53,49 +53,6 @@ async function cloudPushSchedule(scheduleData) {
   })
 }
 
-// ─── Cloud: poll for pending orders ──────────────────────────────────────────
-
-async function cloudPollPendingOrders() {
-  const config = await getCloudConfig()
-  if (!config) return
-
-  const result = await cloudFetch('/extension/pending-order')
-  if (!result?.order || result.order.status !== 'pending') return
-
-  const order = result.order
-  // Convert to the format expected by quickOrder.js
-  const pendingOrder = {
-    orderId: order.orderId,
-    date: null,
-    approvedAt: new Date(order.queuedAt).toISOString(),
-    lines: order.lines,
-    cloudOrder: true, // Flag so we know to push result back
-  }
-
-  // Store as pending order and try to fill
-  chrome.storage.local.set({ pendingOrder }, () => {
-    updateBadge(pendingOrder)
-
-    // Try to send to an existing Lactalis tab
-    chrome.storage.local.get('lactalisTab', (r) => {
-      const quickOrderUrl = 'https://my.lactalis.com.au/customer/product/quick-add/'
-      if (r.lactalisTab?.tabId && r.lactalisTab.pageType === 'quick_order') {
-        chrome.tabs.sendMessage(
-          r.lactalisTab.tabId,
-          { type: 'FILL_ORDER', order: pendingOrder },
-          () => {
-            if (chrome.runtime.lastError) {
-              chrome.tabs.create({ url: quickOrderUrl })
-            }
-          }
-        )
-      } else {
-        chrome.tabs.create({ url: quickOrderUrl })
-      }
-    })
-  })
-}
-
 // ─── Cloud: push order result to KV ─────────────────────────────────────────
 
 async function cloudPushOrderResult(submission) {
@@ -114,20 +71,6 @@ async function cloudPushOrderResult(submission) {
       lactalisRef: submission.lactalisRef || null,
     }),
   })
-}
-
-// ─── Cloud: push order history to KV ─────────────────────────────────────
-
-async function cloudPushOrderHistory(orderHistory) {
-  const result = await cloudFetch('/extension/order-history', {
-    method: 'POST',
-    body: JSON.stringify(orderHistory),
-  })
-  if (result) {
-    console.log('[Cloud] Order history pushed:', orderHistory?.orders?.length ?? 0, 'orders')
-  } else {
-    console.warn('[Cloud] Order history push failed')
-  }
 }
 
 // ─── Cloud: push cookies to KV ───────────────────────────────────────────────
@@ -201,14 +144,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       sendResponse({ ok: true })
       return true
 
-    // Order history scraped from portal
-    case 'ORDER_HISTORY_UPDATE':
-      chrome.storage.local.set({ orderHistory: msg.payload }, () => {
-        cloudPushOrderHistory(msg.payload)
-        sendResponse({ ok: true })
-      })
-      return true
-
     // Schedule data scraped from portal (Session 12)
     case 'SCHEDULE_UPDATE':
       chrome.storage.local.set({ schedule: msg.payload }, () => {
@@ -252,23 +187,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         } else {
           // quickOrder.js auto-detects pendingOrder on page load
           chrome.tabs.create({ url: quickOrderUrl })
-        }
-        sendResponse({ ok: true })
-      })
-      return true
-
-    // PWA requests a live order history re-scrape
-    case 'TRIGGER_ORDER_HISTORY_REFRESH':
-      chrome.storage.local.get('lactalisTab', (result) => {
-        if (result.lactalisTab?.tabId) {
-          chrome.tabs.sendMessage(result.lactalisTab.tabId, { type: 'SCRAPE_ORDER_HISTORY' }, () => {
-            if (chrome.runtime.lastError) {
-              // Tab gone — open portal so orderHistoryScraper auto-runs on load
-              chrome.tabs.create({ url: 'https://my.lactalis.com.au/customer/order/' })
-            }
-          })
-        } else {
-          chrome.tabs.create({ url: 'https://my.lactalis.com.au/customer/order/' })
         }
         sendResponse({ ok: true })
       })

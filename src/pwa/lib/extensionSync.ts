@@ -8,11 +8,10 @@
  */
 
 import { db } from './db'
-import type { DeliverySlot, Order } from './types'
+import type { DeliverySlot, Order, ScrapedOrder } from './types'
 
-const STATUS_KEY        = 'milk-manager-status-updates'
-const SCHEDULE_KEY      = 'milk-manager-schedule-from-extension'
-const ORDER_HISTORY_KEY = 'milk-manager-order-history'
+const STATUS_KEY   = 'milk-manager-status-updates'
+const SCHEDULE_KEY = 'milk-manager-schedule-from-extension'
 
 interface StatusUpdate {
   orderId:     number
@@ -148,11 +147,6 @@ export async function getExtensionStatus(): Promise<{ connected: boolean; lactal
 /** Ask the extension to re-scrape the Lactalis delivery schedule. */
 export function triggerScheduleRefresh() {
   window.dispatchEvent(new CustomEvent('milk-manager-refresh-schedule'))
-}
-
-/** Ask the extension to re-scrape the Lactalis order history. */
-export function triggerOrderHistoryRefresh() {
-  window.dispatchEvent(new CustomEvent('milk-manager-refresh-orders'))
 }
 
 /** Ask the extension to open the Lactalis Quick Order page and auto-submit. */
@@ -322,60 +316,7 @@ export async function pollOrderStatus(): Promise<{
   }
 }
 
-/**
- * Fetch order history from the Worker (KV cache → live Lactalis fetch).
- * Returns { count, debug } — count of orders upserted, debug log from Worker.
- */
-export async function fetchCloudOrderHistory(): Promise<{ count: number; debug?: string[] }> {
-  const base = getWorkerUrl()
-  if (!base) {
-    console.log('[Milk Manager] No Worker URL configured — skipping cloud order history')
-    return { count: 0 }
-  }
-
-  try {
-    const res = await fetch(`${base}/extension/order-history`, { headers: cloudHeaders() })
-    if (!res.ok) {
-      console.log(`[Milk Manager] Cloud order history fetch failed: ${res.status}`)
-      return { count: 0, debug: [`HTTP ${res.status}`] }
-    }
-    const data = await res.json()
-    const debug: string[] = data.debug ?? []
-    if (data.source) debug.unshift(`source: ${data.source}`)
-
-    if (!data.orders || !Array.isArray(data.orders) || data.orders.length === 0) {
-      console.log('[Milk Manager] Cloud order history empty', debug)
-      return { count: 0, debug }
-    }
-
-    console.log(`[Milk Manager] Got ${data.orders.length} orders from cloud`)
-    const count = await upsertOrderHistory(data.orders)
-    return { count, debug }
-  } catch (e) {
-    console.log('[Milk Manager] Cloud order history error:', e)
-    return { count: 0, debug: [(e as Error).message] }
-  }
-}
-
-// ─── Order history sync (scraped portal orders → IndexedDB) ─────────────
-
-interface ScrapedOrder {
-  orderNumber: string
-  createdAt: string | null
-  deliveryDate: string | null
-  orderStatus: string | null
-  refNumber: string | null
-  totalQty: number
-  total: number
-  onlineOrder: boolean | null
-  lineItems?: Array<{
-    itemNumber: string | null
-    productName: string
-    qty: number
-    price: number
-    lineTotal: number
-  }>
-}
+// ─── Order history sync (email-parsed orders → IndexedDB) ─────────────
 
 function mapPortalStatus(status: string | null): Order['status'] {
   if (!status) return 'submitted'
@@ -386,41 +327,8 @@ function mapPortalStatus(status: string | null): Order['status'] {
   return 'submitted'
 }
 
-/**
- * Reads scraped order history from localStorage, upserts into IndexedDB.
- * - Matches existing PWA orders by lactalisOrderNumber
- * - Creates new Order records for portal-only orders (portalSource: true)
- * Returns the number of orders upserted.
- */
-export async function applyOrderHistory(): Promise<number> {
-  const raw = localStorage.getItem(ORDER_HISTORY_KEY)
-  if (!raw) {
-    console.log('[Milk Manager] No order history in localStorage')
-    return 0
-  }
-
-  let data: { orders: ScrapedOrder[]; scrapedAt: number }
-  try {
-    data = JSON.parse(raw)
-  } catch {
-    console.warn('[Milk Manager] Failed to parse order history from localStorage')
-    return 0
-  }
-
-  if (!data.orders || !Array.isArray(data.orders) || data.orders.length === 0) {
-    console.log('[Milk Manager] Order history empty or invalid')
-    return 0
-  }
-
-  console.log(`[Milk Manager] Applying ${data.orders.length} scraped orders from extension`)
-  const count = await upsertOrderHistory(data.orders)
-  console.log(`[Milk Manager] Upserted ${count} orders into IndexedDB`)
-  if (count > 0) localStorage.removeItem(ORDER_HISTORY_KEY)
-  return count
-}
-
-/** Shared upsert logic for order history — used by both localStorage bridge and cloud fetch. */
-async function upsertOrderHistory(scrapedOrders: ScrapedOrder[]): Promise<number> {
+/** Upsert parsed order history into IndexedDB. Used by gmailSync. */
+export async function upsertOrderHistory(scrapedOrders: ScrapedOrder[]): Promise<number> {
   const existingOrders = await db.orders.toArray()
   let upserted = 0
 

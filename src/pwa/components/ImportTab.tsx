@@ -2,8 +2,9 @@ import { useRef, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import {
   Upload, FileSpreadsheet, AlertTriangle, CheckCircle,
-  Clock, ChevronDown, ChevronUp, FileText, Eye, Save, Package, Database,
+  Clock, ChevronDown, ChevronUp, FileText, Eye, Save, Package, Database, Mail, RefreshCw,
 } from 'lucide-react'
+import { connectGmail, disconnectGmail, isGmailConnected, syncGmailOrders, getGmailLastSync } from '../lib/gmailSync'
 import {
   detectReportType,
   parseItemMaintenance,
@@ -687,6 +688,143 @@ function InvoiceSection() {
   )
 }
 
+// ─── Gmail Section ────────────────────────────────────────────────────────────
+
+function GmailSection() {
+  const [connected, setConnected] = useState(isGmailConnected)
+  const [email, setEmail] = useState<string | null>(null)
+  const [syncing, setSyncing] = useState(false)
+  const [connecting, setConnecting] = useState(false)
+  const [lastSync, setLastSync] = useState<string | null>(getGmailLastSync)
+  const [result, setResult] = useState<{ count: number; processed: number; errors: string[] } | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  async function handleConnect() {
+    setConnecting(true)
+    setError(null)
+    try {
+      const addr = await connectGmail()
+      setEmail(addr)
+      setConnected(true)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setConnecting(false)
+    }
+  }
+
+  async function handleSync() {
+    setSyncing(true)
+    setError(null)
+    setResult(null)
+    try {
+      const r = await syncGmailOrders()
+      setResult(r)
+      setLastSync(getGmailLastSync())
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  function handleDisconnect() {
+    disconnectGmail()
+    setConnected(false)
+    setEmail(null)
+    setResult(null)
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Status card */}
+      <div className={`rounded-xl border p-3 ${connected ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'}`}>
+        <div className="flex items-center gap-2">
+          <Mail size={14} className={connected ? 'text-green-600' : 'text-gray-400'} />
+          <span className="text-sm font-medium text-gray-800">
+            {connected
+              ? email ? `Connected as ${email}` : 'Gmail connected'
+              : 'Not connected'}
+          </span>
+        </div>
+        {lastSync && connected && (
+          <p className="text-[11px] text-gray-500 mt-1 ml-5">
+            Last sync: {new Date(lastSync).toLocaleString('en-AU', {
+              day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+            })}
+          </p>
+        )}
+      </div>
+
+      {!connected ? (
+        <button
+          onClick={handleConnect}
+          disabled={connecting || !localStorage.getItem('milk-manager-gmail-client-id')}
+          className="w-full flex items-center justify-center gap-2 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg disabled:opacity-40"
+        >
+          {connecting ? <RefreshCw size={14} className="animate-spin" /> : <Mail size={14} />}
+          {connecting ? 'Connecting...' : 'Connect Gmail'}
+        </button>
+      ) : (
+        <button
+          onClick={handleSync}
+          disabled={syncing}
+          className="w-full flex items-center justify-center gap-2 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg disabled:opacity-40"
+        >
+          <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
+          {syncing ? 'Syncing...' : 'Sync Orders from Gmail'}
+        </button>
+      )}
+
+      {!connected && !localStorage.getItem('milk-manager-gmail-client-id') && (
+        <p className="text-[11px] text-amber-600">
+          Set your Gmail OAuth Client ID in Settings → Gmail Sync first.
+        </p>
+      )}
+
+      {result && (
+        <div className="p-3 bg-green-50 border border-green-200 rounded-lg space-y-1">
+          <div className="flex items-center gap-2">
+            <CheckCircle size={14} className="text-green-600" />
+            <span className="text-sm font-medium text-green-800">Sync complete</span>
+          </div>
+          <p className="text-xs text-green-700 ml-5">
+            {result.count} new order{result.count !== 1 ? 's' : ''} imported
+          </p>
+          {result.processed > result.count && (
+            <p className="text-xs text-green-600 ml-5">
+              {result.processed - result.count} already up to date
+            </p>
+          )}
+          {result.errors.length > 0 && (
+            <div className="ml-5 mt-1 space-y-0.5">
+              {result.errors.map((e, i) => (
+                <p key={i} className="text-[11px] text-amber-700">{e}</p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {error && (
+        <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg">
+          <AlertTriangle size={14} className="text-red-500 shrink-0 mt-0.5" />
+          <p className="text-sm text-red-700">{error}</p>
+        </div>
+      )}
+
+      {connected && (
+        <button
+          onClick={handleDisconnect}
+          className="text-[11px] text-gray-400 underline w-full text-center"
+        >
+          Disconnect Gmail
+        </button>
+      )}
+    </div>
+  )
+}
+
 // ─── Main ImportTab ───────────────────────────────────────────────────────────
 
 export default function ImportTab() {
@@ -715,6 +853,19 @@ export default function ImportTab() {
           Upload a PDF or paste extracted invoice text. Saves line items and updates cost prices.
         </p>
         <InvoiceSection />
+      </section>
+
+      <div className="border-t border-gray-200" />
+
+      <section>
+        <div className="flex items-center gap-2 mb-2">
+          <Mail size={18} className="text-purple-600" />
+          <h2 className="text-base font-semibold text-gray-900">Gmail Order History</h2>
+        </div>
+        <p className="text-xs text-gray-500 mb-3">
+          Import order history directly from Lactalis confirmation emails in your Gmail.
+        </p>
+        <GmailSection />
       </section>
     </div>
   )
