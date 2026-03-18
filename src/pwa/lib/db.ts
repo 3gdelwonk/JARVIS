@@ -12,6 +12,7 @@ import type {
   WasteEntry,
   ClaimRecord,
   PhotoRecord,
+  GmailSyncRecord,
 } from './types'
 import { SEED_PRODUCTS } from '../data/seedProducts'
 import { PRODUCT_IMAGE_MAP } from '../data/productImageMap'
@@ -29,6 +30,7 @@ export class MilkManagerDB extends Dexie {
   wasteLog!: Table<WasteEntry>
   claimRecords!: Table<ClaimRecord>
   photoRecords!: Table<PhotoRecord>
+  gmailSyncLog!: Table<GmailSyncRecord>
 
   constructor() {
     super('MilkManagerDB')
@@ -60,6 +62,10 @@ export class MilkManagerDB extends Dexie {
     this.version(5).stores({
       photoRecords: '++id, orderId, claimId, productId, photoType, capturedAt',
       claimRecords: '++id, productId, claimType, createdAt, orderId',
+    })
+    // v6 — Gmail sync log
+    this.version(6).stores({
+      gmailSyncLog: '++id, &messageId, syncedAt, parsed',
     })
   }
 }

@@ -1,7 +1,8 @@
 import { Component, useEffect, useState, type ReactNode } from 'react'
 import { Camera, LayoutDashboard, ShoppingCart, Package, Settings, Sparkles, Upload } from 'lucide-react'
 import { seedDatabase, backfillBakedImages } from './pwa/lib/db'
-import { applyStatusUpdates, applyExtensionSchedule, applyOrderHistory, fetchCloudOrderHistory, fetchCloudSchedule } from './pwa/lib/extensionSync'
+import { applyStatusUpdates, applyExtensionSchedule, fetchCloudSchedule } from './pwa/lib/extensionSync'
+import { syncGmailOrders, isGmailConnected } from './pwa/lib/gmailSync'
 import Dashboard from './pwa/components/Dashboard'
 import OrderBuilder from './pwa/components/OrderBuilder'
 import MarginAnalysis from './pwa/components/MarginAnalysis'
@@ -85,25 +86,23 @@ export default function App() {
       await Promise.all([
         applyStatusUpdates().catch(console.error),
         applyExtensionSchedule().catch(console.error),
-        applyOrderHistory().catch(console.error),
       ])
       setReady(true)
-      // Also try cloud fallback (non-blocking — runs after UI is ready)
-      fetchCloudOrderHistory().catch(console.error)
+      // Non-blocking post-render syncs
       fetchCloudSchedule().catch(console.error)
+      if (localStorage.getItem('milk-manager-gmail-auto-sync') === 'true' && isGmailConnected()) {
+        syncGmailOrders().catch(console.warn)
+      }
     })()
 
-    const onStatusUpdate       = () => applyStatusUpdates().catch(console.error)
-    const onScheduleUpdate     = () => applyExtensionSchedule().catch(console.error)
-    const onOrderHistoryUpdate = () => applyOrderHistory().catch(console.error)
+    const onStatusUpdate   = () => applyStatusUpdates().catch(console.error)
+    const onScheduleUpdate = () => applyExtensionSchedule().catch(console.error)
 
-    window.addEventListener('milk-manager-status-update',        onStatusUpdate)
-    window.addEventListener('milk-manager-schedule-update',      onScheduleUpdate)
-    window.addEventListener('milk-manager-order-history-update', onOrderHistoryUpdate)
+    window.addEventListener('milk-manager-status-update',   onStatusUpdate)
+    window.addEventListener('milk-manager-schedule-update', onScheduleUpdate)
     return () => {
-      window.removeEventListener('milk-manager-status-update',        onStatusUpdate)
-      window.removeEventListener('milk-manager-schedule-update',      onScheduleUpdate)
-      window.removeEventListener('milk-manager-order-history-update', onOrderHistoryUpdate)
+      window.removeEventListener('milk-manager-status-update',   onStatusUpdate)
+      window.removeEventListener('milk-manager-schedule-update', onScheduleUpdate)
     }
   }, [])
 

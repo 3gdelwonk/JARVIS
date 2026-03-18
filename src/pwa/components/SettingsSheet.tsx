@@ -17,7 +17,7 @@ import {
   type ForecastSettings,
 } from '../lib/forecastEngine'
 import { exportAllData, downloadBackup, importAllData } from '../lib/dataExport'
-import { applyOrderHistory, applyExtensionSchedule, fetchCloudOrderHistory, fetchCloudSchedule, getExtensionStatus, triggerOrderHistoryRefresh, triggerScheduleRefresh, loginToCloud, isCloudLoggedIn, cloudLogout } from '../lib/extensionSync'
+import { applyExtensionSchedule, fetchCloudSchedule, getExtensionStatus, triggerScheduleRefresh, loginToCloud, isCloudLoggedIn, cloudLogout } from '../lib/extensionSync'
 import { db } from '../lib/db'
 
 interface Props {
@@ -33,6 +33,9 @@ export default function SettingsSheet({ onClose }: Props) {
   const [pastedText, setPastedText] = useState('')
   const [pasteError, setPasteError] = useState<string | null>(null)
   const restoreInputRef = useRef<HTMLInputElement>(null)
+  const [gmailClientId, setGmailClientId] = useState(() => localStorage.getItem('milk-manager-gmail-client-id') ?? '')
+  const [gmailClientIdSaved, setGmailClientIdSaved] = useState(false)
+  const [gmailAutoSync, setGmailAutoSync] = useState(() => localStorage.getItem('milk-manager-gmail-auto-sync') === 'true')
   const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem('milk-manager-gemini-key') ?? '')
   const [geminiKeySaved, setGeminiKeySaved] = useState(false)
   const [storeName, setStoreName] = useState(() => localStorage.getItem('milk-manager-store-name') ?? '')
@@ -75,8 +78,7 @@ export default function SettingsSheet({ onClose }: Props) {
 
     if (ext.connected) {
       log.push('Extension: connected')
-      log.push('Triggering extension to scrape orders + schedule...')
-      triggerOrderHistoryRefresh()
+      log.push('Triggering extension to scrape schedule...')
       triggerScheduleRefresh()
       await new Promise((r) => setTimeout(r, 4000))
       log.push('Waited 4s for scraper to complete')
@@ -88,25 +90,14 @@ export default function SettingsSheet({ onClose }: Props) {
 
     // Bridge sync (only useful when extension is connected)
     if (ext.connected) {
-      const hasOrderHistory = !!localStorage.getItem('milk-manager-order-history')
       const hasSchedule = !!localStorage.getItem('milk-manager-schedule-from-extension')
-      log.push(`localStorage order-history: ${hasOrderHistory ? 'present' : 'empty'}`)
       log.push(`localStorage schedule: ${hasSchedule ? 'present' : 'empty'}`)
-
-      const bridgeOrders = await applyOrderHistory().catch(() => 0)
-      log.push(`Bridge sync: ${bridgeOrders} orders applied`)
 
       const bridgeSlots = await applyExtensionSchedule().catch(() => 0)
       log.push(`Bridge schedule: ${bridgeSlots} slots applied`)
     }
 
-    // Cloud sync (works with or without extension)
-    const orderResult = await fetchCloudOrderHistory().catch(() => ({ count: 0, debug: [] as string[] }))
-    log.push(`Cloud orders: ${orderResult.count} applied`)
-    if (orderResult.debug?.length) {
-      orderResult.debug.forEach((d: string) => log.push(`  → ${d}`))
-    }
-
+    // Cloud schedule sync
     const cloudSlots = await fetchCloudSchedule().catch(() => 0)
     log.push(`Cloud schedule: ${cloudSlots} applied`)
 
@@ -382,6 +373,45 @@ export default function SettingsSheet({ onClose }: Props) {
                 </button>
               )}
             </div>
+          </div>
+
+          {/* Gmail Sync */}
+          <div className="border-t border-gray-100 pt-4">
+            <p className="text-sm font-medium text-gray-700 mb-0.5">Gmail Sync</p>
+            <p className="text-[11px] text-gray-400 mb-2">
+              OAuth Client ID from a Google Cloud project with the Gmail API enabled.
+              Add this app's origin as an authorised JavaScript origin.
+            </p>
+            <input
+              type="password"
+              placeholder="xxxxxx.apps.googleusercontent.com"
+              value={gmailClientId}
+              onChange={(e) => setGmailClientId(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono mb-2"
+            />
+            <button
+              onClick={() => {
+                localStorage.setItem('milk-manager-gmail-client-id', gmailClientId.trim())
+                setGmailClientIdSaved(true)
+                setTimeout(() => setGmailClientIdSaved(false), 2000)
+              }}
+              disabled={!gmailClientId.trim()}
+              className="w-full py-2 bg-blue-600 text-white text-sm font-medium rounded-lg disabled:opacity-40 mb-2"
+            >
+              {gmailClientIdSaved ? 'Saved ✓' : 'Save Client ID'}
+            </button>
+            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={gmailAutoSync}
+                onChange={(e) => {
+                  setGmailAutoSync(e.target.checked)
+                  localStorage.setItem('milk-manager-gmail-auto-sync', e.target.checked ? 'true' : 'false')
+                }}
+                className="accent-blue-600"
+              />
+              Auto-sync Gmail on app open
+            </label>
           </div>
 
           {/* Store Info */}

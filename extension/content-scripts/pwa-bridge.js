@@ -52,9 +52,8 @@ window.addEventListener('milk-manager-order-sent', syncOrderToExtension)
 
 // ─── Reverse sync keys ───────────────────────────────────────────────────────
 
-const STATUS_KEY        = 'milk-manager-status-updates'
-const SCHEDULE_KEY      = 'milk-manager-schedule-from-extension'
-const ORDER_HISTORY_KEY = 'milk-manager-order-history'
+const STATUS_KEY   = 'milk-manager-status-updates'
+const SCHEDULE_KEY = 'milk-manager-schedule-from-extension'
 
 /**
  * Reads statusUpdates + schedule from chrome.storage.local and mirrors them
@@ -62,7 +61,7 @@ const ORDER_HISTORY_KEY = 'milk-manager-order-history'
  * Clears statusUpdates in chrome.storage.local once mirrored (consumed once).
  */
 function syncFromExtension() {
-  chrome.storage.local.get(['statusUpdates', 'schedule', 'orderHistory'], (result) => {
+  chrome.storage.local.get(['statusUpdates', 'schedule'], (result) => {
     if (chrome.runtime.lastError) return
 
     const updates = result.statusUpdates
@@ -79,12 +78,6 @@ function syncFromExtension() {
       localStorage.setItem(SCHEDULE_KEY, JSON.stringify(schedule))
       window.dispatchEvent(new CustomEvent('milk-manager-schedule-update'))
     }
-
-    const orderHistory = result.orderHistory
-    if (orderHistory) {
-      localStorage.setItem(ORDER_HISTORY_KEY, JSON.stringify(orderHistory))
-      window.dispatchEvent(new CustomEvent('milk-manager-order-history-update'))
-    }
   })
 }
 
@@ -94,7 +87,7 @@ syncFromExtension()
 // Reverse sync whenever relevant chrome.storage keys change
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return
-  if ('statusUpdates' in changes || 'schedule' in changes || 'orderHistory' in changes) {
+  if ('statusUpdates' in changes || 'schedule' in changes) {
     syncFromExtension()
   }
 })
@@ -116,15 +109,6 @@ window.addEventListener('milk-manager-refresh-schedule', () => {
   chrome.runtime.sendMessage({ type: 'TRIGGER_SCHEDULE_REFRESH' }, (response) => {
     if (chrome.runtime.lastError) return
     console.log('[Milk Manager Bridge] Schedule refresh triggered:', response?.ok)
-  })
-})
-
-// ─── Order history refresh trigger ────────────────────────────────────────────
-
-window.addEventListener('milk-manager-refresh-orders', () => {
-  chrome.runtime.sendMessage({ type: 'TRIGGER_ORDER_HISTORY_REFRESH' }, (response) => {
-    if (chrome.runtime.lastError) return
-    console.log('[Milk Manager Bridge] Order history refresh triggered:', response?.ok)
   })
 })
 
