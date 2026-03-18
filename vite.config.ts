@@ -11,6 +11,7 @@ const startUrl = process.env.VITE_BASE_PATH ?? './'
 export default defineConfig({
   base,
   build: {
+    target: ['es2020', 'safari15'],
     rollupOptions: {
       output: {
         manualChunks: {
