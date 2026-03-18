@@ -8,6 +8,31 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      // Polyfills for iOS 15 Safari (iPhone 6s)
+      if (!Array.prototype.at) {
+        Array.prototype.at = function(n) { n = Math.trunc(n) || 0; if (n < 0) n += this.length; return this[n]; };
+        String.prototype.at = function(n) { n = Math.trunc(n) || 0; if (n < 0) n += this.length; return this[n]; };
+      }
+      if (!Object.hasOwn) {
+        Object.hasOwn = function(o, p) { return Object.prototype.hasOwnProperty.call(o, p); };
+      }
+      if (typeof structuredClone === 'undefined') {
+        window.structuredClone = function(v) { return JSON.parse(JSON.stringify(v)); };
+      }
+      if (!crypto.randomUUID) {
+        crypto.randomUUID = function() {
+          return '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, function(c) {
+            return (+c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> +c / 4).toString(16);
+          });
+        };
+      }
+      if (!AbortSignal.timeout) {
+        AbortSignal.timeout = function(ms) {
+          var c = new AbortController(); setTimeout(function() { c.abort(new DOMException('TimeoutError','TimeoutError')); }, ms); return c.signal;
+        };
+      }
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
