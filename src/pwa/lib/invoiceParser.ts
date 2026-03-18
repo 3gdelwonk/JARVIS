@@ -74,7 +74,7 @@ function parseAmount(s: string): number {
 // ─── Line item parser ────────────────────────────────────────────────────────
 
 // 8-digit invoice codes always start with "00" (two or more leading zeros)
-const CODE_RE = /(?<![0-9])(00[0-9]{6})(?![0-9])/
+const CODE_RE = /(?:^|[^0-9])(00[0-9]{6})(?![0-9])/
 
 function parseLineItem(raw: string): ParsedLine | null {
   // Strip ** suffix and normalise whitespace

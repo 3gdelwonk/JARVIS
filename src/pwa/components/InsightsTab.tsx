@@ -10,7 +10,6 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import Anthropic from '@anthropic-ai/sdk'
 import { Key, Send, Sparkles, Trash2, X } from 'lucide-react'
 import { db } from '../lib/db'
 
@@ -242,6 +241,7 @@ export default function InsightsTab() {
       const context = await buildContext()
       const systemPrompt = `You are an AI analyst for a small IGA supermarket's milk department. You have access to the store's live data below. Answer questions concisely and helpfully. Use specific numbers from the data. When making recommendations, explain why clearly.\n\n${context}`
 
+      const { default: Anthropic } = await import('@anthropic-ai/sdk')
       const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true })
 
       const stream = client.messages.stream({
