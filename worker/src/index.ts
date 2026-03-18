@@ -708,24 +708,154 @@ async function handleExtensionOrderHistoryPush(request: Request, env: Env, origi
   return jsonResponse({ ok: true }, 200, origin, env)
 }
 
-/** GET /extension/order-history — PWA fetches cached order history from KV */
+/** GET /extension/order-history — PWA fetches order history (KV cache → live Lactalis fetch) */
 async function handleExtensionOrderHistoryGet(request: Request, env: Env, origin: string): Promise<Response> {
-  // Allow either a valid session token or extension secret
   const token = bearerToken(request)
   const session = await getSession(token, env)
   if (!session && !isExtensionAuthed(request, env)) {
     return jsonResponse({ error: 'Unauthorized' }, 401, origin, env)
   }
+
+  // 1. Check KV cache first
   const raw = await env.SESSIONS.get('order-history:latest')
-  if (!raw) {
-    return jsonResponse({ orders: [] }, 200, origin, env)
+  if (raw) {
+    try {
+      const data = JSON.parse(raw)
+      if (data.orders?.length > 0) {
+        return jsonResponse({ ...data, source: 'cloud-cache' }, 200, origin, env)
+      }
+    } catch {
+      // Corrupted cache — fall through to live fetch
+    }
   }
+
+  // 2. No cache — try live fetch from Lactalis if we have a session
+  if (!session) {
+    return jsonResponse({ orders: [], source: 'empty' }, 200, origin, env)
+  }
+
+  const orders = await fetchOrderHistoryFromLactalis(session, env)
+  if (orders.length > 0) {
+    // Cache for next time
+    const payload = { orders, scrapedAt: Date.now() }
+    await env.SESSIONS.put('order-history:latest', JSON.stringify(payload), {
+      expirationTtl: 86400,
+    })
+    return jsonResponse({ ...payload, source: 'live' }, 200, origin, env)
+  }
+
+  return jsonResponse({ orders: [], source: 'empty' }, 200, origin, env)
+}
+
+/** Fetch order history from Lactalis OroCommerce datagrid API using session cookies. */
+async function fetchOrderHistoryFromLactalis(
+  session: SessionData,
+  env: Env,
+): Promise<Array<Record<string, unknown>>> {
+  const base = env.LACTALIS_BASE
+  const gridNames = [
+    'frontend-orders-grid-alternative',
+    'frontend-customer-user-orders-grid',
+    'customer-orders-grid',
+    'order-grid',
+    'frontend-orders-grid',
+  ]
+
+  for (const gridName of gridNames) {
+    try {
+      const url = `${base}/datagrid/${gridName}?${encodeURIComponent(gridName)}%5B_pager%5D%5B_page%5D=1&${encodeURIComponent(gridName)}%5B_pager%5D%5B_per_page%5D=50`
+      const res = await proxyFetch(url, {
+        headers: {
+          'Cookie': session.cookies,
+          'User-Agent': 'Mozilla/5.0',
+          'Accept': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+        },
+      })
+
+      if (!res.ok) continue
+      const contentType = res.headers.get('Content-Type') ?? ''
+      if (!contentType.includes('json')) continue
+
+      const data = await res.json() as {
+        data?: Array<Record<string, unknown>>
+        rows?: Array<Record<string, unknown>>
+        results?: Array<Record<string, unknown>>
+      }
+      const rows = data.data ?? data.rows ?? data.results ?? []
+      if (!Array.isArray(rows) || rows.length === 0) continue
+
+      // Map to ScrapedOrder format (same as extension orderHistoryScraper.js)
+      const orders = rows
+        .map((r) => {
+          const orderNumber = String(r.identifier ?? r.orderNumber ?? r.poNumber ?? r.id ?? r.order_number ?? '')
+          if (!orderNumber || !/\d/.test(orderNumber)) return null
+          return {
+            orderNumber,
+            createdAt: r.createdAt ?? r.created_at ?? r.dateOrdered ?? r.date_ordered ?? null,
+            deliveryDate: r.deliveryDate ?? r.delivery_date ?? r.shipDate ?? r.ship_date ?? null,
+            orderStatus: r.statusName ?? r.internalStatusName ?? r.statusLabel ?? r.status ?? r.internal_status_name ?? null,
+            refNumber: r.erp_number ?? r.customerNotes ?? r.po_number ?? r.referenceNumber ?? null,
+            totalQty: Number(r.totalQuantity ?? r.total_quantity ?? 0) || 0,
+            total: parseFloat(String(r.total ?? r.grandTotal ?? r.subtotal ?? 0).replace(/[$,AUD\s]/g, '')) || 0,
+            onlineOrder: r.onlineOrder ?? r.isOnline ?? r.is_online ?? null,
+          }
+        })
+        .filter(Boolean)
+
+      if (orders.length > 0) return orders
+    } catch {
+      continue
+    }
+  }
+
+  // Fallback: try scraping /customer/order/ HTML page
   try {
-    const data = JSON.parse(raw)
-    return jsonResponse(data, 200, origin, env)
+    const res = await proxyFetch(`${base}/customer/order/`, {
+      headers: {
+        'Cookie': session.cookies,
+        'User-Agent': 'Mozilla/5.0',
+        'Accept': 'text/html',
+      },
+    })
+    if (!res.ok) return []
+    const html = await res.text()
+    if (isIncapsulaBlocked(html)) return []
+    if (html.includes('login') && html.length < 2000) return []
+
+    return parseOrderHistoryHtml(html)
   } catch {
-    return jsonResponse({ orders: [] }, 200, origin, env)
+    return []
   }
+}
+
+/** Parse order history from HTML table (fallback when datagrid API fails). */
+function parseOrderHistoryHtml(html: string): Array<Record<string, unknown>> {
+  // Extract table rows using regex (no DOM in Workers)
+  const orders: Array<Record<string, unknown>> = []
+
+  // Find order links: /customer/order/view/{id}
+  const orderLinkRegex = /\/customer\/order\/view\/(\d+)[^>]*>([^<]+)/g
+  const seen = new Set<string>()
+
+  for (const match of html.matchAll(orderLinkRegex)) {
+    const orderNumber = match[2].trim().replace(/^#\s*/, '')
+    if (!orderNumber || !/\d/.test(orderNumber) || seen.has(orderNumber)) continue
+    seen.add(orderNumber)
+
+    orders.push({
+      orderNumber,
+      createdAt: null,
+      deliveryDate: null,
+      orderStatus: null,
+      refNumber: null,
+      totalQty: 0,
+      total: 0,
+      onlineOrder: null,
+    })
+  }
+
+  return orders
 }
 
 /** GET /extension/order-status — PWA polls for order completion */
