@@ -7,9 +7,40 @@
     <title>IGA Milk Manager</title>
   </head>
   <body>
+    <noscript><p style="padding:2rem;text-align:center;font-family:system-ui">JavaScript is required to run this app.</p></noscript>
     <div id="root"></div>
     <script>
-      // Polyfills for iOS 15 Safari (iPhone 6s)
+      // ── Error display: show crashes on screen instead of blank white ──
+      window.onerror = function(msg, src, line, col, err) {
+        var r = document.getElementById('root');
+        if (r && !r.children.length) {
+          r.innerHTML = '<div style="padding:1.5rem;font-family:system-ui;font-size:14px">'
+            + '<p style="color:#dc2626;font-weight:600">App failed to load</p>'
+            + '<p style="color:#666;margin-top:8px;word-break:break-all">' + msg + '</p>'
+            + '<p style="color:#999;margin-top:4px;font-size:12px">' + (src||'') + ':' + (line||'') + '</p>'
+            + '<button onclick="location.reload()" style="margin-top:12px;padding:8px 16px;background:#2563eb;color:#fff;border:none;border-radius:8px;font-size:14px">Reload</button>'
+            + '</div>';
+        }
+      };
+      window.onunhandledrejection = function(e) {
+        var msg = e.reason ? (e.reason.message || String(e.reason)) : 'Promise rejected';
+        window.onerror(msg, '', 0, 0, e.reason);
+      };
+
+      // ── Escape hatch: if app hasn't rendered after 5s, nuke stale SW ──
+      setTimeout(function() {
+        var r = document.getElementById('root');
+        if (r && !r.children.length && 'serviceWorker' in navigator) {
+          navigator.serviceWorker.getRegistrations().then(function(regs) {
+            if (regs.length) {
+              regs.forEach(function(reg) { reg.unregister(); });
+              location.reload();
+            }
+          });
+        }
+      }, 5000);
+
+      // ── Polyfills for older Safari (≤15.3) ──
       if (!Array.prototype.at) {
         Array.prototype.at = function(n) { n = Math.trunc(n) || 0; if (n < 0) n += this.length; return this[n]; };
         String.prototype.at = function(n) { n = Math.trunc(n) || 0; if (n < 0) n += this.length; return this[n]; };
