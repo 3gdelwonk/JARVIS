@@ -734,6 +734,48 @@
 
   // ─── Message listener (FILL_ORDER from popup) ─────────────────────────────
 
+  /** Auto-submit a cloud-relayed order (fillViaAPI → fillViaPaste fallback) */
+  async function autoSubmitCloudOrder(order) {
+    // Clear autoSubmit flag immediately to prevent re-triggering
+    chrome.storage.local.set({
+      pendingOrder: { ...order, autoSubmit: false },
+    })
+
+    setStatus('Auto-submitting cloud order…', 'info')
+    panelState = 'filling'
+
+    // Wait for page to fully load (CSRF token, etc.)
+    await delay(2000)
+
+    const apiResult = await fillViaAPI(order)
+    if (apiResult.ok) {
+      setStatus('Cloud order submitted to checkout!', 'success')
+      panelState = 'filled'
+      chrome.runtime.sendMessage({ type: 'CLOUD_ORDER_SUBMITTED', success: true })
+      watchForOrderSuccess()
+      return
+    }
+
+    // Fallback: try paste method
+    const pasteResult = await fillViaPaste(order)
+    if (pasteResult.ok) {
+      setStatus('Cloud order filled via paste — click Create Order', 'success')
+      panelState = 'filled'
+      chrome.runtime.sendMessage({ type: 'CLOUD_ORDER_SUBMITTED', success: true })
+      watchForCreateOrderButton()
+      watchForOrderSuccess()
+      return
+    }
+
+    setStatus(`Auto-submit failed: ${apiResult.error}`, 'error')
+    panelState = 'error'
+    chrome.runtime.sendMessage({
+      type: 'CLOUD_ORDER_SUBMITTED',
+      success: false,
+      error: apiResult.error,
+    })
+  }
+
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.type === 'FILL_ORDER') {
       currentOrder = msg.order
@@ -741,6 +783,11 @@
       shadow.getElementById('panel').classList.remove('minimised')
       shadow.getElementById('minimise-btn').textContent = '—'
       sendResponse({ ok: true })
+
+      // Auto-submit cloud orders
+      if (msg.order?.autoSubmit && msg.order?.cloudOrder) {
+        autoSubmitCloudOrder(msg.order)
+      }
     }
     if (msg.type === 'GET_PAGE_INFO') {
       // Lets popup query whether CSRF token is available on this page
@@ -760,6 +807,11 @@
   chrome.storage.local.get('pendingOrder', (result) => {
     currentOrder = result.pendingOrder ?? null
     renderOrder(currentOrder)
+
+    // Auto-submit cloud orders on page load
+    if (currentOrder?.autoSubmit && currentOrder?.cloudOrder) {
+      autoSubmitCloudOrder(currentOrder)
+    }
   })
 
   // Keep current order in sync if updated while page is open

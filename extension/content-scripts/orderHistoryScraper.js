@@ -712,7 +712,10 @@
         console.log(`${LOG} Fetching detail page: ${url}`)
         const resp = await fetch(url, {
           credentials: 'include',
-          headers: { 'Accept': 'text/html' },
+          headers: {
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Referer': 'https://my.lactalis.com.au/customer/order/',
+          },
         })
         if (!resp.ok) {
           console.log(`${LOG} Detail page ${id}: ${resp.status}`)
@@ -784,8 +787,8 @@
    * Enrich orders with line items by fetching detail pages.
    * Limits to the most recent MAX_DETAIL_FETCHES orders to avoid rate limiting.
    */
-  const MAX_DETAIL_FETCHES = 5
-  const DETAIL_FETCH_DELAY = 1500 // ms between requests to avoid Incapsula
+  const MAX_DETAIL_FETCHES = 3
+  const DETAIL_FETCH_DELAY = 4000 // ms between requests to avoid Incapsula
 
   async function enrichOrdersWithLineItems(orders) {
     // Only fetch details for recent orders that don't already have lineItems
