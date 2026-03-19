@@ -20,7 +20,7 @@
   "content_scripts": [
     {
       "matches": ["https://*.lactalis.com.au/*", "https://mylactalis.com.au/*"],
-      "js": ["content-scripts/main.js", "content-scripts/scheduleScraper.js", "content-scripts/quickOrder.js"],
+      "js": ["content-scripts/autoLogin.js", "content-scripts/main.js", "content-scripts/scheduleScraper.js", "content-scripts/quickOrder.js"],
       "run_at": "document_idle"
     },
     {
