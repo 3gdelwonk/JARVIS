@@ -304,6 +304,42 @@ pasteLoadBtn.addEventListener('click', () => {
   })
 })
 
+// ─── Auto-Login config ───────────────────────────────────────────────────────
+
+const lactalisUsername  = document.getElementById('lactalis-username')
+const lactalisPassword  = document.getElementById('lactalis-password')
+const autoLoginToggle   = document.getElementById('auto-login-toggle')
+const loginSaveBtn      = document.getElementById('login-save-btn')
+const loginStatus       = document.getElementById('login-status')
+
+async function loadLoginConfig() {
+  const r = await chrome.storage.local.get(['lactalisUsername', 'lactalisPassword', 'autoLoginEnabled'])
+  if (r.lactalisUsername) lactalisUsername.value = r.lactalisUsername
+  if (r.lactalisPassword) lactalisPassword.value = r.lactalisPassword
+  autoLoginToggle.checked = !!r.autoLoginEnabled
+  loginStatus.textContent = r.autoLoginEnabled ? 'Enabled' : 'Disabled'
+  loginStatus.style.color = r.autoLoginEnabled ? '#16a34a' : '#9ca3af'
+}
+
+loginSaveBtn.addEventListener('click', () => {
+  const username = lactalisUsername.value.trim()
+  const password = lactalisPassword.value.trim()
+  const enabled = autoLoginToggle.checked
+  if (enabled && (!username || !password)) {
+    showToast('Enter both username and password')
+    return
+  }
+  chrome.storage.local.set({
+    lactalisUsername: username,
+    lactalisPassword: password,
+    autoLoginEnabled: enabled,
+  }, () => {
+    loginStatus.textContent = enabled ? 'Enabled' : 'Disabled'
+    loginStatus.style.color = enabled ? '#16a34a' : '#9ca3af'
+    showToast(enabled ? 'Auto-login enabled' : 'Credentials saved (auto-login off)')
+  })
+})
+
 // ─── Cloud Sync config ────────────────────────────────────────────────────────
 
 const cloudWorkerUrl = document.getElementById('cloud-worker-url')
@@ -340,6 +376,7 @@ async function init() {
   renderStatus(storage.lactalisTab)
   renderDelivery(storage.schedule)
   renderOrder(storage.pendingOrder)
+  loadLoginConfig()
   loadCloudConfig()
 }
 

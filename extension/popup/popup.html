@@ -285,6 +285,42 @@
     </div>
   </div>
 
+  <!-- Auto-Login config -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-label">Auto-Login</span>
+      <span class="section-action" id="login-status" style="cursor:default; color:#9ca3af">Disabled</span>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:5px;">
+      <input
+        id="lactalis-username"
+        type="text"
+        placeholder="Lactalis username / email"
+        autocomplete="off"
+        style="width:100%; border:1px solid #d1d5db; border-radius:6px; padding:6px 8px; font-size:11px; outline:none;"
+      />
+      <input
+        id="lactalis-password"
+        type="password"
+        placeholder="Lactalis password"
+        autocomplete="off"
+        style="width:100%; border:1px solid #d1d5db; border-radius:6px; padding:6px 8px; font-size:11px; outline:none;"
+      />
+      <div style="display:flex; align-items:center; gap:6px; margin:2px 0;">
+        <input type="checkbox" id="auto-login-toggle" style="margin:0;" />
+        <label for="auto-login-toggle" style="font-size:11px; color:#374151; cursor:pointer;">
+          Auto-login &amp; keep session alive
+        </label>
+      </div>
+      <button class="btn btn-primary" id="login-save-btn" style="padding:6px 10px; font-size:11px;">
+        Save Credentials
+      </button>
+      <p style="font-size:9px; color:#9ca3af; margin:2px 0 0; line-height:1.4;">
+        Stored locally on this machine only — never sent to the cloud.
+      </p>
+    </div>
+  </div>
+
   <!-- Cloud Sync config -->
   <div class="section">
     <div class="section-header">

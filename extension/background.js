@@ -98,6 +98,7 @@ async function cloudPushCookies() {
 chrome.alarms.clearAll(() => {
   chrome.alarms.create('poll-cloud-orders', { periodInMinutes: 0.5 }) // ~30s
   chrome.alarms.create('push-cookies', { periodInMinutes: 5 })
+  chrome.alarms.create('keep-alive', { periodInMinutes: 10 }) // session keep-alive
 })
 
 /** Poll Worker for pending cloud orders and auto-submit */
@@ -140,12 +141,68 @@ async function pollAndProcessCloudOrder() {
   })
 }
 
+/**
+ * Keep the Lactalis session alive by pinging a lightweight endpoint.
+ * If the session has expired (redirect to login), open the login page
+ * so autoLogin.js can re-authenticate.
+ */
+async function keepSessionAlive() {
+  const { autoLoginEnabled } = await chrome.storage.local.get('autoLoginEnabled')
+  if (!autoLoginEnabled) return
+
+  try {
+    // Use cookies API to check if we have Lactalis cookies at all
+    const cookies = await chrome.cookies.getAll({ domain: 'mylactalis.com.au' })
+    if (cookies.length === 0) {
+      // No cookies — open login page so autoLogin.js can log in
+      console.log('[Keep-Alive] No Lactalis cookies — opening login page')
+      openLactalisLoginIfNeeded()
+      return
+    }
+
+    // Ping a lightweight endpoint to keep cookies fresh
+    const resp = await fetch('https://my.lactalis.com.au/delivery-slots/get-slots/869?preselectCurrentSlot=1', {
+      credentials: 'include',
+      headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+      redirect: 'manual',
+    })
+
+    // If redirected to login or got 401/403 — session expired
+    if (resp.status === 401 || resp.status === 403 || resp.type === 'opaqueredirect') {
+      console.log('[Keep-Alive] Session expired — opening login page')
+      openLactalisLoginIfNeeded()
+    } else {
+      console.log('[Keep-Alive] Session alive (status: ' + resp.status + ')')
+    }
+  } catch (err) {
+    console.warn('[Keep-Alive] Ping failed:', err.message)
+  }
+}
+
+/** Open the Lactalis login page if no Lactalis tab is already open */
+async function openLactalisLoginIfNeeded() {
+  // Check if a Lactalis tab already exists
+  const tabs = await chrome.tabs.query({ url: ['https://*.lactalis.com.au/*', 'https://mylactalis.com.au/*'] })
+  if (tabs.length > 0) {
+    // Reload the existing tab (will redirect to login if session expired)
+    chrome.tabs.reload(tabs[0].id)
+  } else {
+    chrome.tabs.create({
+      url: 'https://my.lactalis.com.au/customer/user/login',
+      active: false,
+    })
+  }
+}
+
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'poll-cloud-orders') {
     await pollAndProcessCloudOrder()
   }
   if (alarm.name === 'push-cookies') {
     await cloudPushCookies()
+  }
+  if (alarm.name === 'keep-alive') {
+    await keepSessionAlive()
   }
 })
 
@@ -238,6 +295,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         }
         sendResponse({ ok: true })
       })
+      return true
+
+    // Auto-login content script reports a login attempt
+    case 'AUTO_LOGIN_ATTEMPTED':
+      console.log(`[Auto-Login] Logged in as ${msg.username} at ${new Date(msg.timestamp).toLocaleTimeString()}`)
+      chrome.storage.local.set({ lastAutoLogin: msg.timestamp })
+      // Push cookies after login succeeds (small delay for cookies to be set)
+      setTimeout(() => cloudPushCookies(), 3000)
+      sendResponse({ ok: true })
       return true
 
     // Content script reports cloud order auto-submission result
