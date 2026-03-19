@@ -30,6 +30,7 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Search,
   ShoppingCart,
   Trash2,
   X,
@@ -136,21 +137,6 @@ interface RowProps {
 }
 
 const ForecastRow = memo(function ForecastRow({ forecast: f, qty, onChange, imageUrl }: RowProps) {
-  const [editing, setEditing] = useState(false)
-  const [inputVal, setInputVal] = useState('')
-  const inputRef = useRef<HTMLInputElement>(null)
-
-  function startEdit() {
-    setInputVal(String(qty))
-    setEditing(true)
-    setTimeout(() => inputRef.current?.select(), 0)
-  }
-
-  function commitEdit() {
-    onChange(f.productId, Math.max(0, parseInt(inputVal, 10) || 0))
-    setEditing(false)
-  }
-
   const stockLabel = f.currentStock !== null ? `${f.currentStock} in stock` : 'stock unknown'
   const stockoutLabel =
     f.daysUntilStockout !== null
@@ -215,21 +201,21 @@ const ForecastRow = memo(function ForecastRow({ forecast: f, qty, onChange, imag
             <Minus size={14} />
           </button>
 
-          {editing ? (
-            <input ref={inputRef} type="number" min={0} value={inputVal}
-              onChange={(e) => setInputVal(e.target.value)}
-              onBlur={commitEdit}
-              onKeyDown={(e) => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') { inputRef.current?.blur(); setEditing(false) } }}
-              className="w-12 text-center text-sm font-semibold border border-blue-400 rounded py-0.5 outline-none" />
-          ) : (
-            <button onClick={startEdit}
-              className={`w-12 text-center text-sm font-semibold py-0.5 rounded ${
-                qty === 0 ? 'text-gray-300' : qty > f.suggestedQty * 1.5 ? 'text-amber-600' : 'text-gray-900'
-              }`}
-              aria-label="Edit quantity">
-              {qty === 0 ? '—' : qty}
-            </button>
-          )}
+          <input
+            type="number"
+            min={0}
+            value={qty === 0 ? '' : qty}
+            placeholder="0"
+            onChange={(e) => onChange(f.productId, Math.max(0, parseInt(e.target.value, 10) || 0))}
+            onFocus={(e) => e.target.select()}
+            className={`w-12 text-center text-sm font-semibold border rounded py-0.5 outline-none focus:border-blue-400 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none ${
+              qty === 0
+                ? 'text-gray-400 border-gray-200 bg-gray-50'
+                : qty > f.suggestedQty * 1.5
+                  ? 'text-amber-600 border-amber-200 bg-amber-50'
+                  : 'text-gray-900 border-blue-200 bg-blue-50'
+            }`}
+          />
 
           <button onPointerDown={(e) => e.preventDefault()}
             onClick={() => onChange(f.productId, qty === 0 ? f.suggestedQty : qty + 1)}
@@ -900,6 +886,8 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
   const [approving, setApproving] = useState(false)
   const [showOk, setShowOk] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  const searchRef = useRef<HTMLInputElement>(null)
 
   const productImages = useLiveQuery(
     () => db.products.toArray().then((ps) => new Map(ps.map((p) => [p.id!, p.imageUrl ?? '']))),
@@ -995,8 +983,17 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
     }
   }
 
+  const searchTerm = search.trim().toLowerCase()
+  const visibleForecasts = searchTerm
+    ? forecasts.filter(
+        (f) =>
+          f.productName.toLowerCase().includes(searchTerm) ||
+          f.itemNumber.toLowerCase().includes(searchTerm),
+      )
+    : forecasts
+
   const grouped = URGENCY_ORDER.reduce<Record<Urgency, Forecast[]>>(
-    (acc, u) => { acc[u] = forecasts.filter((f) => getUrgency(f) === u); return acc },
+    (acc, u) => { acc[u] = visibleForecasts.filter((f) => getUrgency(f) === u); return acc },
     { critical: [], order: [], ok: [] },
   )
 
@@ -1029,25 +1026,55 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
   return (
     <div className="flex flex-col h-full">
       {/* Toolbar */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-white shrink-0">
-        <button onClick={onCancel} className="p-1.5 -ml-1 text-gray-500" aria-label="Cancel">
-          <ArrowLeft size={18} />
-        </button>
-        <p className="text-xs text-gray-500">{forecasts.length} products · {totalItems} to order</p>
-        <div className="flex items-center gap-1.5">
-          <button onClick={resetToSuggested}
-            className="flex items-center gap-1 text-xs text-gray-500 px-2 py-1 rounded border border-gray-200">
-            <RotateCcw size={12} />Fill Suggested
+      <div className="border-b border-gray-200 bg-white shrink-0">
+        <div className="flex items-center justify-between px-3 py-2">
+          <button onClick={onCancel} className="p-1.5 -ml-1 text-gray-500" aria-label="Cancel">
+            <ArrowLeft size={18} />
           </button>
-          <button onClick={load}
-            className="flex items-center gap-1 text-xs text-gray-500 px-2 py-1 rounded border border-gray-200">
-            <RefreshCw size={12} />Refresh
-          </button>
+          <p className="text-xs text-gray-500">
+            {searchTerm ? `${visibleForecasts.length} of ${forecasts.length}` : forecasts.length} products · {totalItems} to order
+          </p>
+          <div className="flex items-center gap-1.5">
+            <button onClick={resetToSuggested}
+              className="flex items-center gap-1 text-xs text-gray-500 px-2 py-1 rounded border border-gray-200">
+              <RotateCcw size={12} />Fill Suggested
+            </button>
+            <button onClick={load}
+              className="flex items-center gap-1 text-xs text-gray-500 px-2 py-1 rounded border border-gray-200">
+              <RefreshCw size={12} />Refresh
+            </button>
+          </div>
+        </div>
+        {/* Search bar */}
+        <div className="px-3 pb-2">
+          <div className="flex items-center gap-2 bg-gray-100 rounded-xl px-3 py-2">
+            <Search size={14} className="text-gray-400 shrink-0" />
+            <input
+              ref={searchRef}
+              type="search"
+              placeholder="Search products or item #…"
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); setShowOk(true) }}
+              className="flex-1 bg-transparent text-sm text-gray-700 placeholder-gray-400 outline-none min-w-0"
+            />
+            {search && (
+              <button onClick={() => { setSearch(''); searchRef.current?.focus() }} className="text-gray-400 shrink-0">
+                <X size={14} />
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
       {/* Forecast list */}
       <div className="flex-1 overflow-auto pb-24">
+        {searchTerm && visibleForecasts.length === 0 && (
+          <div className="p-8 text-center">
+            <Search size={28} className="mx-auto text-gray-200 mb-3" />
+            <p className="text-sm text-gray-400">No products match "{search}"</p>
+            <button onClick={() => setSearch('')} className="mt-2 text-xs text-blue-500">Clear search</button>
+          </div>
+        )}
         {URGENCY_ORDER.map((urgency) => {
           const items = grouped[urgency]
           if (items.length === 0) return null
@@ -1057,6 +1084,7 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
             <div key={urgency}>
               <button
                 onClick={() => isOk && setShowOk((v) => !v)}
+                disabled={isOk && !!searchTerm}
                 className={`w-full flex items-center justify-between px-3 py-2 border-b sticky top-0 z-10 ${URGENCY_HEADER[urgency]}`}
               >
                 <div className="flex items-center gap-2">
@@ -1070,7 +1098,7 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
                 {isOk && (showOk ? <ChevronUp size={14} /> : <ChevronDown size={14} />)}
               </button>
 
-              {(!isOk || showOk) && items.map((f) => (
+              {(!isOk || showOk || !!searchTerm) && items.map((f) => (
                 <ForecastRow key={f.productId} forecast={f} qty={qtys.get(f.productId) ?? 0} onChange={setQty} imageUrl={productImages?.get(f.productId)} />
               ))}
             </div>
