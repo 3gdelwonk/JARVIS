@@ -92,13 +92,61 @@ async function cloudPushCookies() {
   }
 }
 
-// ─── Alarms: safety net ──────────────────────────────────────────────────────
+// ─── Alarms: cloud order polling + heartbeat ─────────────────────────────────
 
-// Clear any stale alarms from prior versions on service worker startup
-chrome.alarms.clearAll()
+// Set up alarms on service worker startup
+chrome.alarms.clearAll(() => {
+  chrome.alarms.create('poll-cloud-orders', { periodInMinutes: 0.5 }) // ~30s
+  chrome.alarms.create('push-cookies', { periodInMinutes: 5 })
+})
 
-chrome.alarms.onAlarm.addListener(() => {
-  // No-op safety net — no alarms are currently used
+/** Poll Worker for pending cloud orders and auto-submit */
+async function pollAndProcessCloudOrder() {
+  const config = await getCloudConfig()
+  if (!config) return // Not configured — skip silently
+
+  const result = await cloudFetch('/extension/pending-order')
+  if (!result?.order || !result.order.lines?.length) return
+
+  const order = result.order
+  const pendingOrder = {
+    orderId: order.orderId,
+    date: order.date || null,
+    lines: order.lines,
+    cloudOrder: true,
+    autoSubmit: true,
+  }
+
+  await chrome.storage.local.set({ pendingOrder })
+  updateBadge(pendingOrder)
+
+  // Try to submit on an existing Quick Order tab first
+  const storage = await chrome.storage.local.get('lactalisTab')
+  const tab = storage.lactalisTab
+
+  if (tab?.tabId && tab.pageType === 'quick_order') {
+    try {
+      await chrome.tabs.sendMessage(tab.tabId, { type: 'FILL_ORDER', order: pendingOrder })
+      return
+    } catch {
+      // Tab gone or unresponsive — fall through to create new tab
+    }
+  }
+
+  // Open Quick Order page in background
+  chrome.tabs.create({
+    url: 'https://my.lactalis.com.au/customer/product/quick-add/',
+    active: false,
+  })
+}
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === 'poll-cloud-orders') {
+    await pollAndProcessCloudOrder()
+  }
+  if (alarm.name === 'push-cookies') {
+    await cloudPushCookies()
+  }
 })
 
 // ─── Message handler ──────────────────────────────────────────────────────────
@@ -187,6 +235,28 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         } else {
           // quickOrder.js auto-detects pendingOrder on page load
           chrome.tabs.create({ url: quickOrderUrl })
+        }
+        sendResponse({ ok: true })
+      })
+      return true
+
+    // Content script reports cloud order auto-submission result
+    case 'CLOUD_ORDER_SUBMITTED':
+      chrome.storage.local.get('pendingOrder', async (result) => {
+        if (result.pendingOrder?.cloudOrder) {
+          await cloudFetch('/extension/order-result', {
+            method: 'POST',
+            body: JSON.stringify({
+              orderId: result.pendingOrder.orderId,
+              success: msg.success,
+              lactalisRef: msg.lactalisRef || null,
+              error: msg.error || null,
+            }),
+          })
+          if (msg.success) {
+            chrome.storage.local.remove('pendingOrder')
+            chrome.action.setBadgeText({ text: '' })
+          }
         }
         sendResponse({ ok: true })
       })

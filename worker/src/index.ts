@@ -14,6 +14,7 @@
  *   POST /extension/order-result   — extension pushes submission result
  *   POST /extension/cookies        — extension pushes Lactalis cookies
  *   GET  /extension/order-status   — PWA polls for order completion
+ *   GET  /extension/heartbeat      — check if relay extension is online
  *
  * Auth: PWA sends `Authorization: Bearer <sessionToken>` for protected routes.
  * The Worker stores Lactalis session cookies in KV, keyed by sessionToken.
@@ -633,6 +634,29 @@ async function handleExtensionPendingOrder(request: Request, env: Env, origin: s
   }
   try {
     const order = JSON.parse(raw)
+
+    // Only return orders that are still pending
+    if (order.status === 'processing') {
+      // If stale (>5 min), reset to pending for retry
+      if (order.pickedUpAt && Date.now() - order.pickedUpAt > 5 * 60 * 1000) {
+        order.status = 'pending'
+        delete order.pickedUpAt
+      } else {
+        return jsonResponse({ order: null }, 200, origin, env)
+      }
+    }
+
+    if (order.status !== 'pending') {
+      return jsonResponse({ order: null }, 200, origin, env)
+    }
+
+    // Mark as processing to prevent double-pickup
+    order.status = 'processing'
+    order.pickedUpAt = Date.now()
+    await env.SESSIONS.put('pending-order:latest', JSON.stringify(order), {
+      expirationTtl: 3600,
+    })
+
     return jsonResponse({ order }, 200, origin, env)
   } catch {
     return jsonResponse({ order: null }, 200, origin, env)
@@ -688,7 +712,24 @@ async function handleExtensionCookies(request: Request, env: Env, origin: string
   await env.SESSIONS.put('cookies:lactalis', body.cookies, {
     expirationTtl: 3600, // 1h TTL
   })
+  // Store timestamp for heartbeat checks
+  await env.SESSIONS.put('cookies:lactalis:timestamp', String(Date.now()), {
+    expirationTtl: 3600,
+  })
   return jsonResponse({ ok: true }, 200, origin, env)
+}
+
+/** GET /extension/heartbeat — check if the relay extension is online */
+async function handleExtensionHeartbeat(request: Request, env: Env, origin: string): Promise<Response> {
+  // Allow both session token and extension secret
+  const token = bearerToken(request)
+  const session = await getSession(token, env)
+  if (!session && !isExtensionAuthed(request, env)) {
+    return jsonResponse({ error: 'Unauthorized' }, 401, origin, env)
+  }
+  const lastPush = await env.SESSIONS.get('cookies:lactalis:timestamp')
+  const online = !!lastPush && (Date.now() - Number(lastPush)) < 600_000 // 10 min
+  return jsonResponse({ online, lastSeen: lastPush ? Number(lastPush) : null }, 200, origin, env)
 }
 
 /** GET /extension/order-status — PWA polls for order completion */
@@ -774,6 +815,10 @@ export default {
         case '/extension/order-status':
           if (request.method !== 'GET') break
           return handleExtensionOrderStatus(request, env, origin)
+
+        case '/extension/heartbeat':
+          if (request.method !== 'GET') break
+          return handleExtensionHeartbeat(request, env, origin)
       }
 
       return jsonResponse({ error: 'Not found' }, 404, origin, env)

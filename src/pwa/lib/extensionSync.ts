@@ -316,6 +316,26 @@ export async function pollOrderStatus(): Promise<{
   }
 }
 
+// ─── Relay health check ─────────────────────────────────────────────────────
+
+/**
+ * Check if the always-on extension relay is online by querying the Worker heartbeat.
+ * Returns { online, lastSeen } where lastSeen is Unix ms of the last cookie push.
+ */
+export async function checkRelayStatus(): Promise<{ online: boolean; lastSeen: number | null }> {
+  const base = getWorkerUrl()
+  if (!base) return { online: false, lastSeen: null }
+
+  try {
+    const res = await fetch(`${base}/extension/heartbeat`, { headers: cloudHeaders() })
+    if (!res.ok) return { online: false, lastSeen: null }
+    const data = await res.json()
+    return { online: !!data.online, lastSeen: data.lastSeen ?? null }
+  } catch {
+    return { online: false, lastSeen: null }
+  }
+}
+
 // ─── Order history sync (email-parsed orders → IndexedDB) ─────────────
 
 function mapPortalStatus(status: string | null): Order['status'] {

@@ -37,7 +37,7 @@ import {
 import { generateForecasts, getSettings, type Forecast } from '../lib/forecastEngine'
 import { db } from '../lib/db'
 import { AVG_DELIVERY_COST, nextDeliveryDate, friendlyError } from '../lib/constants'
-import { submitOrderViaCloud, pollOrderStatus } from '../lib/extensionSync'
+import { submitOrderViaCloud, pollOrderStatus, checkRelayStatus } from '../lib/extensionSync'
 import type { Order, OrderLine } from '../lib/types'
 
 const STATUS_BADGE: Record<Order['status'], string> = {
@@ -454,6 +454,12 @@ function ExportView({ orderId, onBack, onReceive }: ExportViewProps) {
   const [cloudStatus, setCloudStatus] = useState<'idle' | 'submitting' | 'waiting' | 'success' | 'error'>('idle')
   const [cloudMessage, setCloudMessage] = useState('')
   const cloudAbortedRef = useRef(false)
+  const [relayOnline, setRelayOnline] = useState<boolean | null>(null) // null = checking
+
+  // Check relay status on mount
+  useEffect(() => {
+    checkRelayStatus().then(({ online }) => setRelayOnline(online))
+  }, [])
 
   const order = useLiveQuery(() => db.orders.get(orderId), [orderId])
   const lines = useLiveQuery(
@@ -727,83 +733,93 @@ function ExportView({ orderId, onBack, onReceive }: ExportViewProps) {
             </button>
           </div>
 
-          {/* Copy & Open Portal — primary action */}
+          {/* Cloud relay submit — primary action */}
+          <div>
+            {/* Relay status indicator */}
+            <div className="flex items-center gap-1.5 mb-2">
+              <div className={`w-2 h-2 rounded-full ${
+                relayOnline === null ? 'bg-gray-300' : relayOnline ? 'bg-green-500' : 'bg-red-400'
+              }`} />
+              <span className="text-[11px] text-gray-500">
+                {relayOnline === null ? 'Checking relay…' : relayOnline ? 'Main computer: Online' : 'Main computer: Offline'}
+              </span>
+            </div>
+            <button
+              onClick={handleCloudSubmit}
+              disabled={order.status !== 'approved' || cloudStatus === 'submitting' || cloudStatus === 'waiting' || cloudStatus === 'success'}
+              className={`w-full flex flex-col items-center justify-center py-3 rounded-xl text-sm font-semibold transition-colors ${
+                cloudStatus === 'success'
+                  ? 'bg-green-100 text-green-700'
+                  : cloudStatus === 'error'
+                    ? 'bg-red-50 text-red-600'
+                    : cloudStatus === 'waiting'
+                      ? 'bg-amber-50 text-amber-700'
+                      : cloudStatus === 'submitting'
+                        ? 'bg-blue-50 text-blue-600'
+                        : order.status !== 'approved'
+                          ? 'bg-gray-100 text-gray-400'
+                          : 'bg-blue-600 text-white'
+              }`}
+            >
+              <span className="flex items-center gap-2">
+                {cloudStatus === 'waiting' && <RefreshCw size={14} className="animate-spin" />}
+                {cloudStatus === 'success' && <CheckCircle2 size={14} />}
+                {cloudStatus === 'idle' && <ExternalLink size={15} />}
+                {cloudStatus === 'submitting' && <RefreshCw size={14} className="animate-spin" />}
+                {cloudStatus === 'error' && <AlertTriangle size={14} />}
+                {cloudStatus === 'idle' ? 'Submit Order' : cloudMessage}
+              </span>
+              {cloudStatus === 'idle' && (
+                <span className="text-[10px] opacity-70 mt-0.5">
+                  {relayOnline ? 'Auto-submits via your main computer' : 'Queues order — submits when main computer is online'}
+                </span>
+              )}
+            </button>
+            {cloudStatus === 'waiting' && (
+              <button
+                onClick={handleCancelCloud}
+                className="w-full mt-1 py-2 rounded-xl text-xs font-medium text-gray-500 border border-gray-200 bg-white"
+              >
+                Cancel
+              </button>
+            )}
+            {relayOnline === false && cloudStatus === 'idle' && (
+              <p className="text-[11px] text-gray-400 text-center mt-1">
+                Or open Lactalis Quick Order and tap your Fill Order bookmark
+              </p>
+            )}
+          </div>
+
+          {/* Copy & Open Portal — secondary fallback */}
           <button
             onClick={handleCopyAndOpenPortal}
             disabled={!pasteStr}
-            className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-semibold transition-colors ${
+            className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition-colors ${
               copied === 'portal'
                 ? 'bg-green-100 text-green-700'
                 : !pasteStr
                   ? 'bg-gray-100 text-gray-400'
-                  : 'bg-blue-600 text-white'
+                  : 'bg-gray-100 text-gray-600'
             }`}
           >
             <ExternalLink size={15} />
-            {copied === 'portal' ? 'Copied! Paste into Quick Order field' : 'Copy Order & Open Lactalis Portal →'}
+            {copied === 'portal' ? 'Copied! Paste into Quick Order field' : 'Copy Order & Open Portal'}
           </button>
-          {copied !== 'portal' && (
-            <p className="text-[11px] text-gray-400 text-center">
-              Copies order to clipboard and opens the Lactalis Quick Order page
-            </p>
-          )}
-
-          {/* Cloud relay submit (works from phone) */}
-          <button
-            onClick={handleCloudSubmit}
-            disabled={order.status !== 'approved' || cloudStatus === 'submitting' || cloudStatus === 'waiting' || cloudStatus === 'success'}
-            className={`w-full flex flex-col items-center justify-center py-3 rounded-xl text-sm font-semibold transition-colors ${
-              cloudStatus === 'success'
-                ? 'bg-green-100 text-green-700'
-                : cloudStatus === 'error'
-                  ? 'bg-red-50 text-red-600'
-                  : cloudStatus === 'waiting'
-                    ? 'bg-amber-50 text-amber-700'
-                    : cloudStatus === 'submitting'
-                      ? 'bg-blue-50 text-blue-600'
-                      : order.status !== 'approved'
-                        ? 'bg-gray-100 text-gray-400'
-                        : 'bg-purple-600 text-white'
-            }`}
-          >
-            <span className="flex items-center gap-2">
-              {cloudStatus === 'waiting' && <RefreshCw size={14} className="animate-spin" />}
-              {cloudStatus === 'success' && <CheckCircle2 size={14} />}
-              {cloudStatus === 'idle' && <ExternalLink size={15} />}
-              {cloudStatus === 'submitting' && <RefreshCw size={14} className="animate-spin" />}
-              {cloudStatus === 'error' && <AlertTriangle size={14} />}
-              {cloudStatus === 'idle' ? 'Submit via Cloud Relay' : cloudMessage}
-            </span>
-            {cloudStatus === 'idle' && (
-              <span className="text-[10px] opacity-70 mt-0.5">Works from phone — routes through desktop extension</span>
-            )}
-          </button>
-          {cloudStatus === 'waiting' && (
-            <button
-              onClick={handleCancelCloud}
-              className="w-full py-2 rounded-xl text-xs font-medium text-gray-500 border border-gray-200 bg-white"
-            >
-              Cancel
-            </button>
-          )}
 
           {/* Auto-submit via extension (desktop only, same-machine) */}
           <button
             onClick={handleSubmitToLactalis}
             disabled={order.status !== 'approved'}
-            className={`w-full flex flex-col items-center justify-center py-2.5 rounded-xl text-sm font-medium transition-colors ${
+            className={`w-full flex items-center justify-center gap-2 py-2 rounded-xl text-xs font-medium transition-colors ${
               submitted
                 ? 'bg-green-100 text-green-700'
                 : order.status !== 'approved'
                   ? 'bg-gray-100 text-gray-400'
-                  : 'bg-gray-100 text-gray-500'
+                  : 'bg-gray-50 text-gray-400 border border-gray-200'
             }`}
           >
-            <span className="flex items-center gap-2">
-              <ExternalLink size={15} />
-              {submitted ? 'Sent to Extension…' : 'Auto-Submit via Extension'}
-            </span>
-            <span className="text-[10px] opacity-60 mt-0.5">Desktop + Chrome extension required</span>
+            <ExternalLink size={13} />
+            {submitted ? 'Sent to Extension…' : 'Auto-Submit via Extension (desktop only)'}
           </button>
         </div>}
 

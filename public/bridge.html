@@ -131,9 +131,39 @@
     <div class="toast" id="save-toast"></div>
   </div>
 
-  <!-- Step 2: Diagnostic test -->
+  <!-- Quick Fill Bookmarklet (primary path) -->
+  <div class="section" style="border: 2px solid #2563eb;">
+    <div class="section-title">2. One-Tap Fill Order <span class="tag tag-green">recommended</span></div>
+    <p class="section-desc">The fastest way to submit orders from any device. Just log into Lactalis, open Quick Order, and tap the bookmark.</p>
+
+    <p class="section-desc" style="font-weight:600; color:#374151;">Desktop (Chrome/Edge/Firefox):</p>
+    <ol>
+      <li>Click <strong>"Copy Fill Bookmarklet"</strong> below</li>
+      <li>Create a new bookmark in your browser</li>
+      <li>Name it <strong>"Fill Order"</strong></li>
+      <li>Paste the copied code as the bookmark <strong>URL</strong></li>
+    </ol>
+
+    <p class="section-desc" style="font-weight:600; color:#374151; margin-top:8px;">Mobile (Safari/Chrome):</p>
+    <ol>
+      <li>Bookmark this page first (any bookmark will do)</li>
+      <li>Click <strong>"Copy Fill Bookmarklet"</strong> below</li>
+      <li>Edit the bookmark you just made — replace the URL with the copied code</li>
+      <li>Rename it to <strong>"Fill Order"</strong></li>
+    </ol>
+
+    <button class="btn btn-primary" id="copy-fill-btn" disabled>Copy Fill Bookmarklet</button>
+    <div class="toast" id="fill-toast"></div>
+
+    <p class="section-desc" style="margin-top:10px; margin-bottom:0;"><strong>To use:</strong> Open Lactalis Quick Order page in your browser → tap the <strong>"Fill Order"</strong> bookmark → order auto-fills!</p>
+  </div>
+
+  <details style="margin-bottom:16px;">
+    <summary style="font-size:15px; font-weight:600; color:#374151; cursor:pointer; padding:12px 0;">Advanced Setup (iOS Shortcuts / Userscripts)</summary>
+
+  <!-- Step 2 (old): Diagnostic test -->
   <div class="section">
-    <div class="section-title">2. Test Shortcuts <span class="tag tag-blue">once</span></div>
+    <div class="section-title">Test Shortcuts <span class="tag tag-blue">once</span></div>
     <p class="section-desc">First let's confirm iOS Shortcuts can run JavaScript on the Lactalis page. This takes 2 minutes.</p>
     <button class="btn btn-test" id="copy-test-btn">Copy Test Code</button>
     <div class="toast" id="test-toast"></div>
@@ -195,6 +225,8 @@
     <div class="toast" id="userscript-toast"></div>
   </div>
 
+  </details> <!-- end Advanced Setup accordion -->
+
   <!-- Code preview -->
   <details>
     <summary style="font-size:13px; color:#6b7280; cursor:pointer;">View generated code</summary>
@@ -222,6 +254,8 @@
   var downloadUserscriptBtn = document.getElementById('download-userscript-btn')
   var userscriptToast = document.getElementById('userscript-toast')
   var codePreview = document.getElementById('code-preview')
+  var copyFillBtn = document.getElementById('copy-fill-btn')
+  var fillToast = document.getElementById('fill-toast')
 
   // Load saved config
   try {
@@ -230,6 +264,7 @@
       workerInput.value = saved.w || ''
       secretInput.value = saved.k || ''
       copyBtn.disabled = false
+      copyFillBtn.disabled = false
       copyUserscriptBtn.disabled = false
       downloadUserscriptBtn.disabled = false
       updatePreview(saved)
@@ -619,12 +654,35 @@
     var config = { w: w, k: k }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(config))
     copyBtn.disabled = false
+    copyFillBtn.disabled = false
     copyUserscriptBtn.disabled = false
     downloadUserscriptBtn.disabled = false
     updatePreview(config)
     saveToast.textContent = 'Config saved'
     saveToast.className = 'toast success'
     setTimeout(function() { saveToast.className = 'toast' }, 2000)
+  })
+
+  // ─── Fill Order bookmarklet ───────────────────────────────────────────────
+
+  function generateFillBookmarklet(config) {
+    var cfg = JSON.stringify({ w: config.w.replace(/\/+$/, ''), k: config.k })
+    return "javascript:void(function(){window.__FILL_ORDER_CONFIG__=" + cfg + ";var s=document.createElement('script');s.src='https://3gdelwonk.github.io/JARVIS/fill-order.js';document.head.appendChild(s)})()"
+  }
+
+  copyFillBtn.addEventListener('click', function() {
+    var saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null')
+    if (!saved) return
+    var bookmarklet = generateFillBookmarklet(saved)
+    navigator.clipboard.writeText(bookmarklet).then(function() {
+      fillToast.textContent = 'Bookmarklet copied — create a bookmark and paste as URL'
+      fillToast.className = 'toast success'
+      setTimeout(function() { fillToast.className = 'toast' }, 5000)
+    }).catch(function() {
+      codePreview.textContent = bookmarklet
+      fillToast.textContent = 'Copy failed — long-press the code at bottom to select'
+      fillToast.className = 'toast error'
+    })
   })
 
   copyTestBtn.addEventListener('click', function() {
