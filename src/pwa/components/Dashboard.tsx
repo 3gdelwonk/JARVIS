@@ -37,17 +37,9 @@ import {
 import { db } from '../lib/db'
 import { generateForecasts, getSettings, type Forecast } from '../lib/forecastEngine'
 import { analyzeHistory } from '../lib/historyAnalyzer'
-import { AVG_DELIVERY_COST, DELIVERY_DAYS, nextDeliveryDate, friendlyError } from '../lib/constants'
+import { AVG_DELIVERY_COST, DELIVERY_DAYS, nextDeliveryDate, friendlyError, STATUS_BADGE } from '../lib/constants'
 import { getExtensionStatus, triggerScheduleRefresh, fetchCloudSchedule } from '../lib/extensionSync'
-import type { Order } from '../lib/types'
-
-const STATUS_BADGE: Record<Order['status'], string> = {
-  draft:     'bg-gray-100 text-gray-500',
-  approved:  'bg-blue-100 text-blue-700',
-  submitted: 'bg-purple-100 text-purple-700',
-  delivered: 'bg-green-100 text-green-700',
-  cancelled: 'bg-red-100 text-red-600',
-}
+import { downloadFile } from '../lib/dataExport'
 
 // ─── Next delivery helpers ─────────────────────────────────────────────────────
 
@@ -80,14 +72,7 @@ function buildWasteCsv(entries: import('../lib/types').WasteEntry[]): string {
 }
 
 function downloadWasteCsv(entries: import('../lib/types').WasteEntry[]) {
-  const csv = buildWasteCsv(entries)
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `waste-report-${new Date().toISOString().split('T')[0]}.csv`
-  a.click()
-  URL.revokeObjectURL(url)
+  downloadFile(buildWasteCsv(entries), `waste-report-${new Date().toISOString().split('T')[0]}.csv`)
 }
 
 // ─── Reorder alert row ────────────────────────────────────────────────────────

@@ -37,17 +37,10 @@ import {
 } from 'lucide-react'
 import { generateForecasts, getSettings, type Forecast } from '../lib/forecastEngine'
 import { db } from '../lib/db'
-import { AVG_DELIVERY_COST, nextDeliveryDate, friendlyError } from '../lib/constants'
+import { AVG_DELIVERY_COST, nextDeliveryDate, friendlyError, STATUS_BADGE } from '../lib/constants'
 import { submitOrderViaCloud, pollOrderStatus, checkRelayStatus } from '../lib/extensionSync'
+import { downloadFile } from '../lib/dataExport'
 import type { Order, OrderLine } from '../lib/types'
-
-const STATUS_BADGE: Record<Order['status'], string> = {
-  draft:      'bg-gray-100 text-gray-600',
-  approved:   'bg-blue-100 text-blue-700',
-  submitted:  'bg-purple-100 text-purple-700',
-  delivered:  'bg-green-100 text-green-700',
-  cancelled:  'bg-red-100 text-red-600',
-}
 
 // ─── Urgency helpers ──────────────────────────────────────────────────────────
 
@@ -99,16 +92,6 @@ function buildCsvString(lines: OrderLine[]): string {
     .filter((l) => l.approvedQty > 0)
     .map((l) => `${l.itemNumber},${l.approvedQty}`)
   return ['Item Number,Quantity', ...rows].join('\n')
-}
-
-function downloadCsv(csvContent: string, filename: string) {
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  a.click()
-  URL.revokeObjectURL(url)
 }
 
 const EXTENSION_STORAGE_KEY = 'milk-manager-pending-order'
@@ -485,7 +468,7 @@ function ExportView({ orderId, onBack, onReceive }: ExportViewProps) {
   }
 
   function handleDownload() {
-    downloadCsv(csvStr, filename)
+    downloadFile(csvStr, filename)
   }
 
   function handleSubmitToLactalis() {
