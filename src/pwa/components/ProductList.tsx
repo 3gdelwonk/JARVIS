@@ -35,6 +35,17 @@ const CATEGORY_LABELS: Record<string, string> = {
   specialty: 'Specialty',
 }
 
+const LIQUOR_CATEGORY_ORDER = ['beer', 'wine', 'spirits', 'cider', 'rtd', 'non_alc', 'specialty'] as const
+const LIQUOR_CATEGORY_LABELS: Record<string, string> = {
+  beer:     'Beer & Craft',
+  wine:     'Wine',
+  spirits:  'Spirits & Whisky',
+  cider:    'Cider',
+  rtd:      'RTD & Premix',
+  non_alc:  'Non-Alcoholic',
+  specialty: 'Other',
+}
+
 type DeptFilter = 'all' | 'dairy' | 'liquor' | 'general'
 
 interface EditState {
@@ -43,6 +54,8 @@ interface EditState {
   defaultOrderQty: string
   targetDaysOfStock: string
   sellPrice: string
+  abv: string
+  bottleSize: string
 }
 
 function StockGauge({ qoh, min, max }: { qoh: number | null; min: number; max?: number }) {
@@ -69,6 +82,8 @@ function ProductRow({ product, qoh }: { product: Product; qoh: number | null }) 
     defaultOrderQty: String(product.defaultOrderQty),
     targetDaysOfStock: String(product.targetDaysOfStock),
     sellPrice: String(product.sellPrice),
+    abv: String(product.abv ?? ''),
+    bottleSize: String(product.bottleSize ?? ''),
   })
 
   const margin = calcMargin(product.sellPrice, money(product.lactalisCostPrice))
@@ -95,6 +110,8 @@ function ProductRow({ product, qoh }: { product: Product; qoh: number | null }) 
         defaultOrderQty: String(product.defaultOrderQty),
         targetDaysOfStock: String(product.targetDaysOfStock),
         sellPrice: String(product.sellPrice),
+        abv: String(product.abv ?? ''),
+        bottleSize: String(product.bottleSize ?? ''),
       })
     }
   }, [product, expanded])
@@ -116,14 +133,19 @@ function ProductRow({ product, qoh }: { product: Product; qoh: number | null }) 
     setSaving(true)
     try {
       const maxStock = edit.maxStockLevel.trim() !== '' ? Number(edit.maxStockLevel) || undefined : undefined
-      await db.products.update(product.id!, {
+      const updates: Parameters<typeof db.products.update>[1] = {
         minStockLevel: Number(edit.minStockLevel) || 0,
         maxStockLevel: maxStock,
         defaultOrderQty: Number(edit.defaultOrderQty) || 0,
         targetDaysOfStock: Number(edit.targetDaysOfStock) || 4,
         sellPrice: newSell,
         updatedAt: new Date(),
-      })
+      }
+      if (product.department === 'liquor') {
+        updates.abv        = edit.abv        ? Number(edit.abv)        : undefined
+        updates.bottleSize = edit.bottleSize ? Number(edit.bottleSize) : undefined
+      }
+      await db.products.update(product.id!, updates)
       setExpanded(false)
     } catch (err) {
       console.error('Failed to save product:', err)
@@ -241,6 +263,35 @@ function ProductRow({ product, qoh }: { product: Product; qoh: number | null }) 
                 className="border border-gray-300 rounded px-2 py-1 text-sm w-full"
               />
             </div>
+            {product.department === 'liquor' && (
+              <>
+                <div className="flex flex-col gap-0.5">
+                  <label htmlFor={`abv-${product.id}`} className="text-[11px] text-gray-500 font-medium">ABV %</label>
+                  <input
+                    id={`abv-${product.id}`}
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    placeholder="e.g. 4.5"
+                    value={edit.abv}
+                    onChange={(e) => setEdit((s) => ({ ...s, abv: e.target.value }))}
+                    className="border border-gray-300 rounded px-2 py-1 text-sm w-full"
+                  />
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <label htmlFor={`bottle-size-${product.id}`} className="text-[11px] text-gray-500 font-medium">Bottle Size (ml)</label>
+                  <input
+                    id={`bottle-size-${product.id}`}
+                    type="number"
+                    min="0"
+                    placeholder="e.g. 700"
+                    value={edit.bottleSize}
+                    onChange={(e) => setEdit((s) => ({ ...s, bottleSize: e.target.value }))}
+                    className="border border-gray-300 rounded px-2 py-1 text-sm w-full"
+                  />
+                </div>
+              </>
+            )}
           </div>
 
           <div className="flex gap-2 mt-3">
@@ -391,7 +442,11 @@ export default function ProductList() {
     return matchQuery && matchDept
   })
 
-  const grouped = CATEGORY_ORDER.reduce<Record<string, Product[]>>((acc, cat) => {
+  const isLiquorView = deptFilter === 'liquor'
+  const activeCatOrder  = isLiquorView ? LIQUOR_CATEGORY_ORDER  : CATEGORY_ORDER
+  const activeCatLabels = isLiquorView ? LIQUOR_CATEGORY_LABELS : CATEGORY_LABELS
+
+  const grouped = activeCatOrder.reduce<Record<string, Product[]>>((acc, cat) => {
     const items = filtered.filter((p) => p.category === cat)
     if (items.length) acc[cat] = items
     return acc
@@ -457,7 +512,7 @@ export default function ProductList() {
           <div key={cat}>
             <div className="px-3 py-1.5 bg-gray-100 sticky top-0 z-10 flex items-center justify-between">
               <span className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
-                {CATEGORY_LABELS[cat]}
+                {activeCatLabels[cat] ?? cat}
               </span>
               <span className="text-xs text-gray-500">{items.length} SKUs</span>
             </div>

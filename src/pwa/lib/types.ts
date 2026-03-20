@@ -8,17 +8,24 @@ export interface Product {
   name: string;
   smartRetailName?: string;
   imageUrl?: string;
-  category: "fresh" | "flavoured" | "uht" | "specialty";
+  category: "fresh" | "flavoured" | "uht" | "specialty"
+          | "spirits" | "wine" | "beer" | "cider" | "rtd" | "non_alc";
+  department?: "dairy" | "liquor" | "general";   // defaults to 'dairy' for existing products
   isGstBearing: boolean;
   active: boolean;
   orderUnit: string;
   unitsPerOrder: number;
   minStockLevel: number;
+  maxStockLevel?: number;
   defaultOrderQty: number;
   targetDaysOfStock: number;
   lactalisCostPrice: number;
   metcashCostPrice?: number;
   sellPrice: number;
+  supplier?: string;                               // e.g. 'lactalis', 'alm', 'metcash'
+  abv?: number          // Alcohol By Volume % (e.g. 4.5)
+  bottleSize?: number   // Container size in ml (e.g. 700, 750, 1125)
+  notes?: string        // Free-text field for staff notes on any product
   orderFrequency: "every" | "most" | "some" | "occasional";
   createdAt: Date;
   updatedAt: Date;
@@ -186,4 +193,47 @@ export interface GmailSyncRecord {
   subject: string;
   orderNumber?: string;
   parseError?: string;
+}
+
+export interface SalesRecord {
+  id?: number;
+  productId?: number;         // FK if matched to a product
+  barcode: string;            // raw barcode/PLU from JARVISmart
+  date: string;               // YYYY-MM-DD (daily aggregate)
+  qtySold: number;            // units sold that day
+  salesValue: number;         // revenue (ex-GST)
+  cogs: number;               // cost of goods sold
+  department?: string;        // raw dept from Smart Retail
+  importBatchId: string;
+  importedAt: Date;
+}
+
+export interface Promotion {
+  id?: number
+  productId: number
+  productName: string   // denormalized (avoids joins on display)
+  barcode: string       // denormalized (for salesRecords velocity lookup)
+  startDate: string     // YYYY-MM-DD
+  endDate: string       // YYYY-MM-DD
+  promoPrice: number
+  normalPrice: number
+  promoType: 'price_reduction' | 'multibuy' | 'special'
+  multibuyQty?: number    // e.g. 3  (buy 3…)
+  multibuyPrice?: number  // e.g. 10 (…for $10)
+  notes?: string
+  createdAt: Date
+}
+
+// Computed at query time — not stored in DB
+export interface StockPerformance {
+  productId: number;
+  avgDailySales: number;
+  dataSource: "pos_scan" | "invoice" | "default";
+  stockTurnRate: number;      // annualised inventory turns
+  gmroi: number;              // gross margin return on inventory investment
+  daysOfStock: number;        // QOH / avgDailySales
+  velocityTrend: number;      // % change: last 4w vs prev 4w
+  shrinkage?: number;         // units unexplained by deliveries - sales
+  abcClass: "A" | "B" | "C" | "D";   // D = dead stock
+  lastSaleDate?: string;      // YYYY-MM-DD of most recent scan
 }

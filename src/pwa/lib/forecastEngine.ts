@@ -60,6 +60,7 @@ export interface Forecast {
   itemNumber: string
   invoiceCode: string
   category: 'fresh' | 'flavoured' | 'uht' | 'specialty'
+          | 'spirits' | 'wine' | 'beer' | 'cider' | 'rtd' | 'non_alc'
   isGstBearing: boolean
   orderUnit: string
   unitsPerOrder: number
@@ -275,7 +276,9 @@ export async function generateForecasts(
     db.salesRecords.toArray(),
   ])
 
-  const products = allProducts.filter((p) => p.active)
+  const products = allProducts.filter(
+    (p) => p.active && (p.department ?? 'dairy') !== 'liquor'
+  )
 
   // Index invoice-type record IDs
   const invoiceIds = new Set(
