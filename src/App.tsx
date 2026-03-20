@@ -1,7 +1,7 @@
 /// <reference types="vite-plugin-pwa/react" />
 import { Component, useEffect, useState, type ReactNode } from 'react'
 import { useRegisterSW } from 'virtual:pwa-register/react'
-import { BarChart2, Camera, Compass, LayoutDashboard, ShoppingCart, Package, Settings, Sparkles, Upload, Wine } from 'lucide-react'
+import { BarChart2, Camera, Compass, LayoutDashboard, ShoppingCart, Package, Settings, Sparkles, Upload } from 'lucide-react'
 import { seedDatabase, backfillBakedImages } from './pwa/lib/db'
 import { applyStatusUpdates, applyExtensionSchedule, fetchCloudSchedule } from './pwa/lib/extensionSync'
 import { syncGmailOrders, isGmailConnected } from './pwa/lib/gmailSync'
@@ -15,7 +15,6 @@ import ScannerTab from './pwa/components/ScannerTab'
 import SettingsSheet from './pwa/components/SettingsSheet'
 import StockPerformanceTab from './pwa/components/StockPerformanceTab'
 import ProductScoutTab from './pwa/components/ProductScoutTab'
-import LiquorTab from './pwa/components/LiquorTab'
 
 const LAST_TAB_KEY = 'milk-manager-last-tab'
 
@@ -82,7 +81,7 @@ class ErrorBoundary extends Component<
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-type Tab = 'dashboard' | 'order' | 'scanner' | 'products' | 'performance' | 'scout' | 'insights' | 'liquor' | 'import' | 'margins'
+type Tab = 'dashboard' | 'order' | 'scanner' | 'products' | 'performance' | 'scout' | 'insights' | 'import' | 'margins'
 
 const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'dashboard',   label: 'Home',    icon: <LayoutDashboard size={18} /> },
@@ -92,7 +91,6 @@ const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'performance', label: 'Perform', icon: <BarChart2 size={18} /> },
   { id: 'scout',       label: 'Scout',   icon: <Compass size={18} /> },
   { id: 'insights',    label: 'Insights',icon: <Sparkles size={18} /> },
-  { id: 'liquor',      label: 'Liquor',  icon: <Wine size={18} /> },
 ]
 
 const TAB_TITLES: Record<Tab, string> = {
@@ -103,7 +101,6 @@ const TAB_TITLES: Record<Tab, string> = {
   performance: 'Stock Performance',
   scout:       'Product Scout',
   insights:    'AI Insights',
-  liquor:      'Liquor Manager',
   import:      'Import Data',
   margins:     'Margin Analysis',
 }
@@ -161,7 +158,6 @@ export default function App() {
       case 'margins':     return <MarginAnalysis />
       case 'performance': return <StockPerformanceTab />
       case 'scout':       return <ProductScoutTab />
-      case 'liquor':      return <LiquorTab />
       default: return <div className="p-4 text-sm text-gray-400">Unknown tab</div>
     }
   }
