@@ -1,4 +1,6 @@
+/// <reference types="vite-plugin-pwa/react" />
 import { Component, useEffect, useState, type ReactNode } from 'react'
+import { useRegisterSW } from 'virtual:pwa-register/react'
 import { BarChart2, Camera, Compass, LayoutDashboard, ShoppingCart, Package, Settings, Sparkles, Upload, Wine } from 'lucide-react'
 import { seedDatabase, backfillBakedImages } from './pwa/lib/db'
 import { applyStatusUpdates, applyExtensionSchedule, fetchCloudSchedule } from './pwa/lib/extensionSync'
@@ -16,6 +18,35 @@ import ProductScoutTab from './pwa/components/ProductScoutTab'
 import LiquorTab from './pwa/components/LiquorTab'
 
 const LAST_TAB_KEY = 'milk-manager-last-tab'
+
+// ─── Update banner ────────────────────────────────────────────────────────────
+
+function UpdateBanner() {
+  const { needRefresh: [needRefresh, setNeedRefresh], updateServiceWorker } = useRegisterSW()
+
+  if (!needRefresh) return null
+
+  return (
+    <div className="flex items-center justify-between px-4 py-2 bg-blue-600 text-white shrink-0 gap-3">
+      <p className="text-sm">Update available — new version ready.</p>
+      <div className="flex items-center gap-3 shrink-0">
+        <button
+          onClick={() => updateServiceWorker(true)}
+          className="text-sm font-semibold underline whitespace-nowrap"
+        >
+          Refresh now
+        </button>
+        <button
+          onClick={() => setNeedRefresh(false)}
+          className="text-white/70 text-lg leading-none"
+          aria-label="Dismiss"
+        >
+          ✕
+        </button>
+      </div>
+    </div>
+  )
+}
 
 // ─── Error boundary ──────────────────────────────────────────────────────────
 
@@ -167,6 +198,8 @@ export default function App() {
           <ErrorBoundary>{renderTab()}</ErrorBoundary>
         )}
       </main>
+
+      <UpdateBanner />
 
       <nav className="flex border-t border-gray-200 bg-white pb-safe">
         {tabs.map((tab) => (
