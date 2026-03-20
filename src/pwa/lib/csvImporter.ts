@@ -129,6 +129,27 @@ function csvToRows(file: File): Promise<Row[]> {
   })
 }
 
+// ─── Import mode ─────────────────────────────────────────────────────────────
+
+export type ImportMode = 'dairy' | 'liquor' | 'all'
+
+const LIQUOR_DEPT_TERMS = ['liquor', 'beer', 'wine', 'spirits', 'beverages', 'alcohol', 'drinks', 'cider', 'rtd']
+
+function isLiquorDept(raw: string): boolean {
+  const v = raw.toLowerCase().trim()
+  return LIQUOR_DEPT_TERMS.some((t) => v.includes(t))
+}
+
+function mapLiquorCategory(deptName: string): import('./types').Product['category'] {
+  const v = deptName.toLowerCase().trim()
+  if (v.includes('beer'))    return 'beer'
+  if (v.includes('wine'))    return 'wine'
+  if (v.includes('spirit'))  return 'spirits'
+  if (v.includes('cider'))   return 'cider'
+  if (v.includes('rtd'))     return 'rtd'
+  return 'specialty'
+}
+
 // ─── Auto-detect report type ─────────────────────────────────────────────────
 
 export type ReportType = 'item_maintenance' | 'item_stock' | 'unknown'
@@ -190,6 +211,7 @@ function isMilkDept(raw: string): boolean {
 
 export async function parseItemMaintenance(
   file: File,
+  importMode: ImportMode = 'dairy',
 ): Promise<MaintenanceImportResult> {
   const rows = await fileToRows(file)
 
@@ -231,7 +253,13 @@ export async function parseItemMaintenance(
     const deptName = getVal(row, ['Department Name', 'department name', 'dept name'])
 
     if (!isActive(active)) { result.skipped++; continue }
-    if (!isMilkDept(deptName)) { result.skipped++; continue }
+
+    const deptAccepted =
+      importMode === 'liquor' ? isLiquorDept(deptName)
+      : importMode === 'all'  ? (isMilkDept(deptName) || isLiquorDept(deptName))
+      : isMilkDept(deptName)  // 'dairy' — existing behaviour unchanged
+
+    if (!deptAccepted) { result.skipped++; continue }
 
     const barcode = getVal(row, ['Barcode', 'barcode', 'EAN'])
     if (!barcode || barcode === 'NH') { result.skipped++; continue }
@@ -239,8 +267,10 @@ export async function parseItemMaintenance(
     const supplierCode = getVal(row, ['Supplier Code', 'supplier code', 'supplier_code'])
 
     const entry = byBarcode.get(barcode) ?? {}
-    if (supplierCode === LACTALIS_SUPPLIER) entry.lactalis = row
-    else if (supplierCode === METCASH_SUPPLIER) entry.metcash = row
+    if (supplierCode === LACTALIS_SUPPLIER)      entry.lactalis = row
+    else if (supplierCode === METCASH_SUPPLIER)  entry.metcash = row
+    else if (importMode !== 'dairy')             entry.lactalis = entry.lactalis ?? row
+    // liquor suppliers get stored in the primary slot; first row per barcode wins
     byBarcode.set(barcode, entry)
   }
 
@@ -254,9 +284,11 @@ export async function parseItemMaintenance(
     let lactalisCost: number | undefined
     let metcashCost: number | undefined
 
+    const anomalyThreshold = importMode === 'liquor' ? 200 : 20
+
     if (lactalis) {
       const cost = parsePrice(getVal(lactalis, ['Normal Cost', 'normal cost', 'cost price']))
-      if (cost > 20) {
+      if (cost > anomalyThreshold) {
         const name = getVal(lactalis, ['Description', 'description'])
         result.anomalies.push(`Lactalis cost $${cost.toFixed(2)} for "${name}" (barcode ${barcode}) — likely carton cost — price NOT updated, enter unit price manually`)
       } else {
@@ -266,7 +298,7 @@ export async function parseItemMaintenance(
 
     if (metcash) {
       const cost = parsePrice(getVal(metcash, ['Normal Cost', 'normal cost', 'cost price']))
-      if (cost > 20) {
+      if (cost > anomalyThreshold) {
         const name = getVal(metcash, ['Description', 'description'])
         result.anomalies.push(`Metcash cost $${cost.toFixed(2)} for "${name}" (barcode ${barcode}) — likely carton cost — price NOT updated, enter unit price manually`)
       } else {
@@ -290,6 +322,8 @@ export async function parseItemMaintenance(
       const orderCode = getVal(sourceRow, ['Order Code', 'order code', 'order_code', 'item number'])
       const itemNumber = orderCode ? parseInt(orderCode, 10).toString() : ''
       const invoiceCode = itemNumber ? itemNumber.padStart(8, '0') : barcode
+      const deptNameForRow = getVal(sourceRow, ['Department Name', 'department name', 'dept name'])
+      const isLiquorRow = importMode !== 'dairy' && isLiquorDept(deptNameForRow)
       try {
         await db.products.add({
           barcode,
@@ -297,7 +331,8 @@ export async function parseItemMaintenance(
           itemNumber,
           name,
           smartRetailName: name,
-          category: 'fresh',
+          category: isLiquorRow ? mapLiquorCategory(deptNameForRow) : 'fresh',
+          department: isLiquorRow ? 'liquor' : undefined,
           isGstBearing: false,
           active: true,
           orderUnit: 'EA',
