@@ -15,7 +15,8 @@
  */
 
 import { db } from './db'
-import type { InvoiceLine, Product } from './types'
+import { parseLocalDate } from './constants'
+import type { InvoiceLine, Product, SalesRecord } from './types'
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
 
@@ -83,22 +84,16 @@ export interface Forecast {
 
   // Confidence
   confidence: 'high' | 'medium' | 'low'
-  dataPoints: number            // Invoice delivery events used
+  dataPoints: number            // Invoice delivery events used (or POS days when velocitySource='pos_scan')
   insufficientData: boolean     // < 2 events — suggestion is a rough estimate
+  velocitySource: 'pos_scan' | 'invoice' | 'default'
+  posDataDays: number           // Days of POS scan data available (0 if none)
 
   // Waste
   wasteRate: number | null      // fraction wasted (wastedQty / receivedQty); null = no data
 }
 
 // ─── Math helpers ─────────────────────────────────────────────────────────────
-
-/** Construct local-midnight Date from a YYYY-MM-DD string.
- *  Using the Date(y,m,d) constructor (not string parsing) avoids browser
- *  inconsistencies and prevents DST-boundary ±1 errors (CLAUDE.md rule). */
-function parseLocalDate(dateStr: string): Date {
-  const [y, m, d] = dateStr.split('-').map(Number)
-  return new Date(y, m - 1, d)
-}
 
 function sampleStdDev(nums: number[]): number {
   if (nums.length < 2) return 0
@@ -124,58 +119,98 @@ function forecastProduct(
   currentStock: number | null,
   settings: ForecastSettings,
   wasteRate: number | null,
+  posRecords: SalesRecord[] = [],  // POS sales from salesRecords table (last 90d, pre-filtered)
 ): Forecast {
   const targetDays = product.targetDaysOfStock || settings.targetDaysOfStock
-
-  // Aggregate qty per delivery date — skip lines with malformed dates to prevent
-  // sort corruption (PITFALL: invoiceParser may produce null/invalid deliveryDate)
-  const VALID_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
-  const byDate = new Map<string, number>()
-  for (const l of lines) {
-    if (!VALID_DATE_RE.test(l.deliveryDate)) continue
-    byDate.set(l.deliveryDate, (byDate.get(l.deliveryDate) ?? 0) + l.quantity)
-  }
-
-  const deliveryDates = [...byDate.keys()].sort()
-  const deliveryQtys = deliveryDates.map((d) => byDate.get(d)!)
-  const dataPoints = deliveryDates.length
 
   // Defaults — overwritten when we have sufficient data
   let avgDailySales = 0
   let avgPerDelivery = product.defaultOrderQty
   let deliveryFrequency = FREQ_WEEKLY[product.orderFrequency] ?? 2
   let safetyStock = 0
-  let suggestedQty: number
+  let suggestedQty: number = product.defaultOrderQty
+  let dataPoints = 0
+  let velocitySource: Forecast['velocitySource'] = 'default'
+  let posDataDays = 0
 
-  if (dataPoints >= 2) {
-    // parseLocalDate() uses new Date(y,m,d) — guaranteed local midnight, no
-    // string-parsing ambiguity, consistent across DST transitions (CLAUDE.md)
-    const periodDays = Math.max(
-      1,
-      (parseLocalDate(deliveryDates[dataPoints - 1]!).getTime() -
-        parseLocalDate(deliveryDates[0]!).getTime()) /
-        86400000,
-    )
-    const totalQty = deliveryQtys.reduce((a, b) => a + b, 0)
+  // ── Phase 1: Try POS-based velocity (demand-side — more accurate) ──────────
+  if (posRecords.length > 0) {
+    const uniqueDates = [...new Set(posRecords.map((r) => r.date))].sort()
+    posDataDays = uniqueDates.length
 
-    avgDailySales = totalQty / periodDays
-    avgPerDelivery = totalQty / dataPoints
-    deliveryFrequency = Math.min(7, (dataPoints / periodDays) * 7)
+    if (posDataDays >= 7) {
+      const periodDays = Math.max(
+        1,
+        (parseLocalDate(uniqueDates[uniqueDates.length - 1]!).getTime() -
+          parseLocalDate(uniqueDates[0]!).getTime()) /
+          86400000 +
+          1,
+      )
+      const totalQty = posRecords.reduce((s, r) => s + r.qtySold, 0)
+      avgDailySales = totalQty / periodDays
 
-    const σ = sampleStdDev(deliveryQtys)
-    safetyStock = Math.max(
-      0,
-      settings.safetyStockMultiplier * σ * Math.sqrt(settings.leadTimeDays),
-    )
+      // Daily variance for safety stock calculation
+      const dailyQtys = uniqueDates.map((d) =>
+        posRecords.filter((r) => r.date === d).reduce((s, r) => s + r.qtySold, 0),
+      )
+      const σ = sampleStdDev(dailyQtys)
+      safetyStock = Math.max(
+        0,
+        settings.safetyStockMultiplier * σ * Math.sqrt(settings.leadTimeDays),
+      )
 
-    const stock = currentStock !== null && currentStock > 0 ? currentStock : 0
-    suggestedQty = targetDays * avgDailySales + safetyStock - stock
-  } else if (dataPoints === 1) {
-    avgPerDelivery = deliveryQtys[0] ?? product.defaultOrderQty
-    suggestedQty = avgPerDelivery
-  } else {
-    // No invoice history — fall back to manually-set defaultOrderQty
-    suggestedQty = product.defaultOrderQty
+      const stock = currentStock !== null && currentStock > 0 ? currentStock : 0
+      suggestedQty = targetDays * avgDailySales + safetyStock - stock
+      velocitySource = 'pos_scan'
+      dataPoints = posDataDays
+    }
+  }
+
+  // ── Phase 2: Fall back to invoice-based velocity ───────────────────────────
+  if (velocitySource === 'default') {
+    // Aggregate qty per delivery date — skip lines with malformed dates to prevent
+    // sort corruption (PITFALL: invoiceParser may produce null/invalid deliveryDate)
+    const VALID_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+    const byDate = new Map<string, number>()
+    for (const l of lines) {
+      if (!VALID_DATE_RE.test(l.deliveryDate)) continue
+      byDate.set(l.deliveryDate, (byDate.get(l.deliveryDate) ?? 0) + l.quantity)
+    }
+
+    const deliveryDates = [...byDate.keys()].sort()
+    const deliveryQtys = deliveryDates.map((d) => byDate.get(d)!)
+    dataPoints = deliveryDates.length
+
+    if (dataPoints >= 2) {
+      // parseLocalDate() uses new Date(y,m,d) — guaranteed local midnight, no
+      // string-parsing ambiguity, consistent across DST transitions (CLAUDE.md)
+      const periodDays = Math.max(
+        1,
+        (parseLocalDate(deliveryDates[dataPoints - 1]!).getTime() -
+          parseLocalDate(deliveryDates[0]!).getTime()) /
+          86400000,
+      )
+      const totalQty = deliveryQtys.reduce((a, b) => a + b, 0)
+
+      avgDailySales = totalQty / periodDays
+      avgPerDelivery = totalQty / dataPoints
+      deliveryFrequency = Math.min(7, (dataPoints / periodDays) * 7)
+
+      const σ = sampleStdDev(deliveryQtys)
+      safetyStock = Math.max(
+        0,
+        settings.safetyStockMultiplier * σ * Math.sqrt(settings.leadTimeDays),
+      )
+
+      const stock = currentStock !== null && currentStock > 0 ? currentStock : 0
+      suggestedQty = targetDays * avgDailySales + safetyStock - stock
+      velocitySource = 'invoice'
+    } else if (dataPoints === 1) {
+      avgPerDelivery = deliveryQtys[0] ?? product.defaultOrderQty
+      suggestedQty = avgPerDelivery
+      velocitySource = 'invoice'
+    }
+    // else: velocitySource stays 'default', suggestedQty = defaultOrderQty
   }
 
   // Apply global multiplier and round; never go negative
@@ -191,8 +226,11 @@ function forecastProduct(
       ? Math.round((currentStock / avgDailySales) * 10) / 10
       : null
 
+  // POS data has higher confidence threshold (daily data vs delivery events)
   const confidence: Forecast['confidence'] =
-    dataPoints >= 8 ? 'high' : dataPoints >= 3 ? 'medium' : 'low'
+    velocitySource === 'pos_scan'
+      ? posDataDays >= 14 ? 'high' : posDataDays >= 7 ? 'medium' : 'low'
+      : dataPoints >= 8 ? 'high' : dataPoints >= 3 ? 'medium' : 'low'
 
   return {
     productId: product.id!,
@@ -215,7 +253,9 @@ function forecastProduct(
     sellPrice: product.sellPrice,
     confidence,
     dataPoints,
-    insufficientData: dataPoints < 2,
+    insufficientData: velocitySource === 'default' || dataPoints < 2,
+    velocitySource,
+    posDataDays,
     wasteRate,
   }
 }
@@ -225,13 +265,14 @@ function forecastProduct(
 export async function generateForecasts(
   settings: ForecastSettings = getSettings(),
 ): Promise<Forecast[]> {
-  const [allProducts, allLines, allRecords, allSnapshots, allBatches, allWaste] = await Promise.all([
+  const [allProducts, allLines, allRecords, allSnapshots, allBatches, allWaste, allSales] = await Promise.all([
     db.products.toArray(),
     db.invoiceLines.toArray(),
     db.invoiceRecords.toArray(),
     db.stockSnapshots.toArray(),
     db.expiryBatches.toArray(),
     db.wasteLog.toArray(),
+    db.salesRecords.toArray(),
   ])
 
   const products = allProducts.filter((p) => p.active)
@@ -269,10 +310,38 @@ export async function generateForecasts(
     latestQoh.set(s.productId, s.qoh)
   }
 
+  // POS sales grouped by productId and barcode for fast lookup
+  // Filter to last 90 days so we don't use stale sales data for forecasting
+  const cutoff90 = (() => {
+    const d = new Date()
+    d.setDate(d.getDate() - 90)
+    return d.toISOString().split('T')[0]
+  })()
+  const recentSales = allSales.filter((s) => s.date >= cutoff90)
+
+  const salesByProductId = new Map<number, typeof recentSales>()
+  const salesByBarcode = new Map<string, typeof recentSales>()
+  for (const s of recentSales) {
+    if (s.productId) {
+      const arr = salesByProductId.get(s.productId) ?? []
+      arr.push(s)
+      salesByProductId.set(s.productId, arr)
+    }
+    const arr2 = salesByBarcode.get(s.barcode) ?? []
+    arr2.push(s)
+    salesByBarcode.set(s.barcode, arr2)
+  }
+
   return products.map((p) => {
     const received = receivedByProduct.get(p.id!) ?? 0
     const wasted   = wastedByProduct.get(p.id!) ?? 0
     const wasteRate = received > 0 ? Math.round((wasted / received) * 1000) / 1000 : null
+
+    // Use productId-matched sales first, then barcode fallback
+    const posRecords =
+      salesByProductId.get(p.id!) ??
+      (p.barcode ? salesByBarcode.get(p.barcode) : undefined) ??
+      []
 
     return forecastProduct(
       p,
@@ -280,6 +349,7 @@ export async function generateForecasts(
       latestQoh.has(p.id!) ? (latestQoh.get(p.id!) ?? null) : null,
       settings,
       wasteRate,
+      posRecords,
     )
   })
 }

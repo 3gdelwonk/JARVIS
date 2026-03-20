@@ -24,6 +24,12 @@ export function round2(n: number): number {
   return Math.round(n * 100) / 100
 }
 
+/** Gross margin %. Returns null when sell price is zero/negative. */
+export function calcMarginPct(sell: number, cost: number): number | null {
+  if (sell <= 0) return null
+  return ((sell - cost) / sell) * 100
+}
+
 // ─── Date helpers ─────────────────────────────────────────────────────────────
 
 /**
@@ -33,6 +39,13 @@ export function round2(n: number): number {
 export function parseLocalDate(dateStr: string): Date {
   const [y, m, d] = dateStr.split('-').map(Number)
   return new Date(y!, m! - 1, d!)
+}
+
+/** Returns a YYYY-MM-DD string for N days ago from today (local time). */
+export function getDaysAgoDateString(days: number): string {
+  const d = new Date()
+  d.setDate(d.getDate() - days)
+  return d.toISOString().split('T')[0]!
 }
 
 /** Next Mon/Wed/Fri delivery date from today (same day included) */
@@ -46,6 +59,32 @@ export function nextDeliveryDate(): Date {
   }
   return today
 }
+
+// ─── Order status badge colours ───────────────────────────────────────────────
+
+import type { Order } from './types'
+
+export const STATUS_BADGE: Record<Order['status'], string> = {
+  draft:     'bg-gray-100 text-gray-500',
+  approved:  'bg-blue-100 text-blue-700',
+  submitted: 'bg-purple-100 text-purple-700',
+  delivered: 'bg-green-100 text-green-700',
+  cancelled: 'bg-red-100 text-red-600',
+}
+
+// ─── localStorage key registry ────────────────────────────────────────────────
+
+/** Single source of truth for all localStorage keys used across the PWA. */
+export const STORAGE_KEYS = {
+  CLAUDE_KEY:         'milk-manager-claude-key',
+  GEMINI_KEY:         'milk-manager-gemini-key',
+  GMAIL_CLIENT_ID:    'milk-manager-gmail-client-id',
+  GMAIL_TOKEN:        'milk-manager-gmail-token',
+  GMAIL_TOKEN_EXPIRY: 'milk-manager-gmail-token-expiry',
+  GMAIL_LAST_SYNC:    'milk-manager-gmail-last-sync',
+  GMAIL_AUTO_SYNC:    'milk-manager-gmail-auto-sync',
+  LAST_TAB:           'milk-manager-last-tab',
+} as const
 
 // ─── User-friendly error messages ─────────────────────────────────────────────
 

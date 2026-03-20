@@ -3,14 +3,14 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { ChevronDown, ChevronUp, ExternalLink, ImageOff, RefreshCw, Search } from 'lucide-react'
 import { db, backfillBakedImages } from '../lib/db'
 import { PRODUCT_IMAGE_MAP } from '../data/productImageMap'
+import { round2, calcMarginPct } from '../lib/constants'
 import type { Product, StockSnapshot } from '../lib/types'
 
-// Money helper — avoids floating point errors
-const money = (val: number) => Math.round(val * 100) / 100
+const money = round2
 
 function calcMargin(sellPrice: number, costPrice: number): string {
-  if (sellPrice <= 0) return '—'
-  return ((sellPrice - costPrice) / sellPrice * 100).toFixed(1)
+  const pct = calcMarginPct(sellPrice, costPrice)
+  return pct === null ? '—' : pct.toFixed(1)
 }
 
 const FREQUENCY_LABELS: Record<string, string> = {
@@ -35,11 +35,29 @@ const CATEGORY_LABELS: Record<string, string> = {
   specialty: 'Specialty',
 }
 
+type DeptFilter = 'all' | 'dairy' | 'liquor' | 'general'
+
 interface EditState {
   minStockLevel: string
+  maxStockLevel: string
   defaultOrderQty: string
   targetDaysOfStock: string
   sellPrice: string
+}
+
+function StockGauge({ qoh, min, max }: { qoh: number | null; min: number; max?: number }) {
+  if (qoh === null || (min === 0 && !max)) return null
+  const pct = max && max > 0
+    ? Math.min(100, (qoh / max) * 100)
+    : min > 0 ? Math.min(100, (qoh / (min * 2)) * 100) : 0
+  const color = max && max > 0
+    ? qoh < min ? 'bg-red-400' : qoh > max ? 'bg-amber-400' : 'bg-green-400'
+    : qoh < min ? 'bg-red-400' : 'bg-green-400'
+  return (
+    <div className="mt-1 h-1 bg-gray-200 rounded-full overflow-hidden" title={`QOH ${qoh} / min ${min}${max ? ` / max ${max}` : ''}`}>
+      <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
+    </div>
+  )
 }
 
 function ProductRow({ product, qoh }: { product: Product; qoh: number | null }) {
@@ -47,6 +65,7 @@ function ProductRow({ product, qoh }: { product: Product; qoh: number | null }) 
   const [saving, setSaving] = useState(false)
   const [edit, setEdit] = useState<EditState>({
     minStockLevel: String(product.minStockLevel),
+    maxStockLevel: String(product.maxStockLevel ?? ''),
     defaultOrderQty: String(product.defaultOrderQty),
     targetDaysOfStock: String(product.targetDaysOfStock),
     sellPrice: String(product.sellPrice),
@@ -72,6 +91,7 @@ function ProductRow({ product, qoh }: { product: Product; qoh: number | null }) 
     if (!expanded) {
       setEdit({
         minStockLevel: String(product.minStockLevel),
+        maxStockLevel: String(product.maxStockLevel ?? ''),
         defaultOrderQty: String(product.defaultOrderQty),
         targetDaysOfStock: String(product.targetDaysOfStock),
         sellPrice: String(product.sellPrice),
@@ -95,8 +115,10 @@ function ProductRow({ product, qoh }: { product: Product; qoh: number | null }) 
 
     setSaving(true)
     try {
+      const maxStock = edit.maxStockLevel.trim() !== '' ? Number(edit.maxStockLevel) || undefined : undefined
       await db.products.update(product.id!, {
         minStockLevel: Number(edit.minStockLevel) || 0,
+        maxStockLevel: maxStock,
         defaultOrderQty: Number(edit.defaultOrderQty) || 0,
         targetDaysOfStock: Number(edit.targetDaysOfStock) || 4,
         sellPrice: newSell,
@@ -148,6 +170,7 @@ function ProductRow({ product, qoh }: { product: Product; qoh: number | null }) 
             <span className="text-xs text-gray-400">·</span>
             <span className="text-xs text-gray-500">QOH {qoh !== null ? qoh : '—'}</span>
           </div>
+          <StockGauge qoh={qoh} min={product.minStockLevel} max={product.maxStockLevel} />
         </div>
         <div className="flex items-center gap-1.5 shrink-0 mt-0.5">
           <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${FREQUENCY_COLORS[freqKey] ?? FREQUENCY_COLORS.some}`}>
@@ -169,6 +192,18 @@ function ProductRow({ product, qoh }: { product: Product; qoh: number | null }) 
                 min="0"
                 value={edit.minStockLevel}
                 onChange={(e) => setEdit((s) => ({ ...s, minStockLevel: e.target.value }))}
+                className="border border-gray-300 rounded px-2 py-1 text-sm w-full"
+              />
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <label htmlFor={`max-stock-${product.id}`} className="text-[11px] text-gray-500 font-medium">Max Stock Level</label>
+              <input
+                id={`max-stock-${product.id}`}
+                type="number"
+                min="0"
+                placeholder="optional"
+                value={edit.maxStockLevel}
+                onChange={(e) => setEdit((s) => ({ ...s, maxStockLevel: e.target.value }))}
                 className="border border-gray-300 rounded px-2 py-1 text-sm w-full"
               />
             </div>
@@ -296,6 +331,7 @@ async function fetchImagesFromOpenFoodFacts(products: Product[]) {
 
 export default function ProductList() {
   const [search, setSearch] = useState('')
+  const [deptFilter, setDeptFilter] = useState<DeptFilter>('all')
   const [fetchingImages, setFetchingImages] = useState(false)
   const [fetchMsg, setFetchMsg] = useState('')
 
@@ -346,14 +382,14 @@ export default function ProductList() {
   }
 
   const query = search.trim().toLowerCase()
-  const filtered = query
-    ? products.filter(
-        (p) =>
-          p.name.toLowerCase().includes(query) ||
-          p.itemNumber.includes(query) ||
-          p.invoiceCode.includes(query),
-      )
-    : products
+  const filtered = products.filter((p) => {
+    const matchQuery = !query ||
+      p.name.toLowerCase().includes(query) ||
+      p.itemNumber.includes(query) ||
+      p.invoiceCode.includes(query)
+    const matchDept = deptFilter === 'all' || (p.department ?? 'dairy') === deptFilter
+    return matchQuery && matchDept
+  })
 
   const grouped = CATEGORY_ORDER.reduce<Record<string, Product[]>>((acc, cat) => {
     const items = filtered.filter((p) => p.category === cat)
@@ -374,6 +410,22 @@ export default function ProductList() {
             onChange={(e) => setSearch(e.target.value)}
             className="w-full pl-8 pr-3 py-1.5 border border-gray-300 rounded-lg text-sm"
           />
+        </div>
+        {/* Department filter */}
+        <div className="flex gap-1.5 mt-1.5 overflow-x-auto pb-0.5">
+          {(['all', 'dairy', 'liquor', 'general'] as const).map((dept) => (
+            <button
+              key={dept}
+              onClick={() => setDeptFilter(dept)}
+              className={`px-2.5 py-0.5 rounded-full text-[11px] font-medium shrink-0 transition-colors ${
+                deptFilter === dept
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              {dept === 'all' ? 'All' : dept.charAt(0).toUpperCase() + dept.slice(1)}
+            </button>
+          ))}
         </div>
         <div className="flex items-center justify-between mt-1">
           <p className="text-[11px] text-gray-500">{filtered.length} of {products.length} products</p>

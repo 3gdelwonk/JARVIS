@@ -141,6 +141,8 @@
     }, 500)
   }
 
+  // NOTE: Intentionally duplicated — content scripts cannot share JS modules.
+  // Mirror any changes to: quickOrder.js, autoLogin.js, public/fill-order.js
   function setInputValue(el, value) {
     // Try native setter for React-controlled inputs
     const proto = el.tagName === 'TEXTAREA'

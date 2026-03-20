@@ -185,6 +185,9 @@
   /**
    * setInputValue — sets a value on a form element in a way that React / Vue
    * controlled components will respond to.
+   *
+   * NOTE: Intentionally duplicated — content scripts cannot share JS modules.
+   * Mirror any changes to: quickOrder.js, autoLogin.js, public/fill-order.js
    */
   function setInputValue(el, value) {
     // Use the native setter to bypass framework synthetic event tracking
@@ -788,11 +791,6 @@
       if (msg.order?.autoSubmit && msg.order?.cloudOrder) {
         autoSubmitCloudOrder(msg.order)
       }
-    }
-    if (msg.type === 'GET_PAGE_INFO') {
-      // Lets popup query whether CSRF token is available on this page
-      const hasCsrf = !!document.querySelector('input[name="oro_product_quick_add[_token]"]')
-      sendResponse({ pageType: window.__milkManagerPageType__, hasCsrf })
     }
   })
 

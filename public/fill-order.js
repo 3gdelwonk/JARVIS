@@ -196,6 +196,8 @@
     return null
   }
 
+  // NOTE: Intentionally duplicated — content scripts cannot share JS modules.
+  // Mirror any changes to: quickOrder.js, autoLogin.js, public/fill-order.js
   function setInputValue(el, value) {
     const nativeSet = Object.getOwnPropertyDescriptor(
       window.HTMLTextAreaElement?.prototype || window.HTMLInputElement?.prototype,

@@ -23,7 +23,7 @@ import {
   TrendingUp,
 } from 'lucide-react'
 import { db } from '../lib/db'
-import { MARGIN_TARGET_PCT, MARGIN_ALERT_RED_PCT, MARGIN_ALERT_AMBER_PCT } from '../lib/constants'
+import { MARGIN_TARGET_PCT, MARGIN_ALERT_RED_PCT, MARGIN_ALERT_AMBER_PCT, calcMarginPct } from '../lib/constants'
 import type { Product, PriceRecord } from '../lib/types'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -33,11 +33,6 @@ const ALERT_RED    = MARGIN_ALERT_RED_PCT
 const ALERT_AMBER  = MARGIN_ALERT_AMBER_PCT
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function calcMarginPct(sell: number, cost: number): number | null {
-  if (sell <= 0) return null
-  return ((sell - cost) / sell) * 100
-}
 
 function suggestedSellPrice(cost: number, targetMarginPct = TARGET_MARGIN): number {
   // sell = cost / (1 - margin); guard against denominator ≤ 0

@@ -12,6 +12,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { Key, Send, Sparkles, Trash2, X } from 'lucide-react'
 import { db } from '../lib/db'
+import { getLatestQoh } from '../lib/stockAnalytics'
+import { getDaysAgoDateString } from '../lib/constants'
 
 const API_KEY_STORAGE = 'milk-manager-claude-key'
 
@@ -30,17 +32,10 @@ async function buildContext(): Promise<string> {
     ])
 
   // Latest QOH per product
-  const latestQoh = new Map<number, number>()
-  const sorted = [...allSnapshots].sort(
-    (a, b) => new Date(a.importedAt).getTime() - new Date(b.importedAt).getTime(),
-  )
-  for (const s of sorted) latestQoh.set(s.productId, s.qoh)
+  const latestQoh = getLatestQoh(allSnapshots)
 
   // Invoice lines last 90 days — aggregate by product code
-  const cutoff = new Date()
-  cutoff.setDate(cutoff.getDate() - 90)
-  const cutoffStr = cutoff.toISOString().split('T')[0]
-  const recent = invoiceLines.filter((l) => l.deliveryDate >= cutoffStr)
+  const recent = invoiceLines.filter((l) => l.deliveryDate >= getDaysAgoDateString(90))
 
   type ProdHistory = { totalQty: number; deliveries: Set<string>; totalCost: number }
   const histMap = new Map<string, ProdHistory>()

@@ -1,5 +1,5 @@
 import { Component, useEffect, useState, type ReactNode } from 'react'
-import { Camera, LayoutDashboard, ShoppingCart, Package, Settings, Sparkles, Upload } from 'lucide-react'
+import { BarChart2, Camera, Compass, LayoutDashboard, ShoppingCart, Package, Settings, Sparkles, Upload } from 'lucide-react'
 import { seedDatabase, backfillBakedImages } from './pwa/lib/db'
 import { applyStatusUpdates, applyExtensionSchedule, fetchCloudSchedule } from './pwa/lib/extensionSync'
 import { syncGmailOrders, isGmailConnected } from './pwa/lib/gmailSync'
@@ -9,9 +9,10 @@ import MarginAnalysis from './pwa/components/MarginAnalysis'
 import ImportTab from './pwa/components/ImportTab'
 import ProductList from './pwa/components/ProductList'
 import InsightsTab from './pwa/components/InsightsTab'
-import ExpiryTab from './pwa/components/ExpiryTab'
 import ScannerTab from './pwa/components/ScannerTab'
 import SettingsSheet from './pwa/components/SettingsSheet'
+import StockPerformanceTab from './pwa/components/StockPerformanceTab'
+import ProductScoutTab from './pwa/components/ProductScoutTab'
 
 const LAST_TAB_KEY = 'milk-manager-last-tab'
 
@@ -49,25 +50,28 @@ class ErrorBoundary extends Component<
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-type Tab = 'dashboard' | 'order' | 'scanner' | 'products' | 'insights' | 'expiry' | 'import' | 'margins'
+type Tab = 'dashboard' | 'order' | 'scanner' | 'products' | 'performance' | 'scout' | 'insights' | 'import' | 'margins'
 
 const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
-  { id: 'dashboard', label: 'Home',     icon: <LayoutDashboard size={18} /> },
-  { id: 'order',     label: 'Order',    icon: <ShoppingCart size={18} /> },
-  { id: 'scanner',   label: 'Scanner',  icon: <Camera size={18} /> },
-  { id: 'products',  label: 'Products', icon: <Package size={18} /> },
-  { id: 'insights',  label: 'Insights', icon: <Sparkles size={18} /> },
+  { id: 'dashboard',   label: 'Home',    icon: <LayoutDashboard size={18} /> },
+  { id: 'order',       label: 'Order',   icon: <ShoppingCart size={18} /> },
+  { id: 'scanner',     label: 'Scanner', icon: <Camera size={18} /> },
+  { id: 'products',    label: 'Products',icon: <Package size={18} /> },
+  { id: 'performance', label: 'Perform', icon: <BarChart2 size={18} /> },
+  { id: 'scout',       label: 'Scout',   icon: <Compass size={18} /> },
+  { id: 'insights',    label: 'Insights',icon: <Sparkles size={18} /> },
 ]
 
 const TAB_TITLES: Record<Tab, string> = {
-  dashboard: 'Milk Manager',
-  order:     'Order Builder',
-  scanner:   'Scanner',
-  products:  'Products',
-  insights:  'AI Insights',
-  expiry:    'Expiry Tracker',
-  import:    'Import Data',
-  margins:   'Margin Analysis',
+  dashboard:   'Milk Manager',
+  order:       'Order Builder',
+  scanner:     'Scanner',
+  products:    'Products',
+  performance: 'Stock Performance',
+  scout:       'Product Scout',
+  insights:    'AI Insights',
+  import:      'Import Data',
+  margins:     'Margin Analysis',
 }
 
 export default function App() {
@@ -114,14 +118,15 @@ export default function App() {
 
   const renderTab = () => {
     switch (activeTab) {
-      case 'dashboard': return <Dashboard onNavigateToOrder={() => handleTabChange('order')} />
-      case 'order':     return <OrderBuilder />
-      case 'scanner':   return <ScannerTab onNavigateToOrders={() => handleTabChange('order')} />
-      case 'expiry':    return <ExpiryTab />
-      case 'insights':  return <InsightsTab />
-      case 'import':    return <ImportTab />
-      case 'products':  return <ProductList />
-      case 'margins':   return <MarginAnalysis />
+      case 'dashboard':   return <Dashboard onNavigateToOrder={() => handleTabChange('order')} />
+      case 'order':       return <OrderBuilder />
+      case 'scanner':     return <ScannerTab onNavigateToOrders={() => handleTabChange('order')} />
+      case 'insights':    return <InsightsTab />
+      case 'import':      return <ImportTab />
+      case 'products':    return <ProductList />
+      case 'margins':     return <MarginAnalysis />
+      case 'performance': return <StockPerformanceTab />
+      case 'scout':       return <ProductScoutTab />
       default: return <div className="p-4 text-sm text-gray-400">Unknown tab</div>
     }
   }
