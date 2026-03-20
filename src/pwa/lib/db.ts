@@ -13,8 +13,6 @@ import type {
   ClaimRecord,
   PhotoRecord,
   GmailSyncRecord,
-  SalesRecord,
-  Promotion,
 } from './types'
 import { SEED_PRODUCTS } from '../data/seedProducts'
 import { PRODUCT_IMAGE_MAP } from '../data/productImageMap'
@@ -33,8 +31,6 @@ export class MilkManagerDB extends Dexie {
   claimRecords!: Table<ClaimRecord>
   photoRecords!: Table<PhotoRecord>
   gmailSyncLog!: Table<GmailSyncRecord>
-  salesRecords!: Table<SalesRecord>
-  promotions!: Table<Promotion>
 
   constructor() {
     super('MilkManagerDB')
@@ -71,15 +67,6 @@ export class MilkManagerDB extends Dexie {
     this.version(6).stores({
       gmailSyncLog: '++id, &messageId, syncedAt, parsed',
     })
-    // v7 — JARVISmart POS sales records (demand-side velocity)
-    //       Product fields department/maxStockLevel/supplier are sparse — no schema change needed
-    this.version(7).stores({
-      salesRecords: '++id, barcode, date, [barcode+date], productId, importBatchId',
-    })
-    // v8 — Liquor promotions tracking
-    this.version(8).stores({
-      promotions: '++id, productId, startDate, endDate',
-    })
   }
 }
 
@@ -90,7 +77,7 @@ export async function clearAllData(): Promise<void> {
     db.invoiceRecords, db.invoiceLines, db.priceHistory,
     db.stockSnapshots, db.orders, db.orderLines,
     db.expiryBatches, db.wasteLog, db.products, db.claimRecords,
-    db.photoRecords, db.salesRecords, db.promotions,
+    db.photoRecords,
   ], async () => {
     await Promise.all([
       db.invoiceRecords.clear(),
@@ -104,8 +91,6 @@ export async function clearAllData(): Promise<void> {
       db.products.clear(),
       db.claimRecords.clear(),
       db.photoRecords.clear(),
-      db.salesRecords.clear(),
-      db.promotions.clear(),
     ])
   })
   // Re-seed the product catalogue

@@ -2,7 +2,7 @@ import { useRef, useState, useEffect } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import {
   Upload, FileSpreadsheet, AlertTriangle, CheckCircle,
-  Clock, ChevronDown, ChevronUp, FileText, Eye, Save, Package, Database, Mail, RefreshCw, BarChart2,
+  Clock, ChevronDown, ChevronUp, FileText, Eye, Save, Package, Database, Mail, RefreshCw,
 } from 'lucide-react'
 import { connectGmail, disconnectGmail, isGmailConnected, syncGmailOrders, getGmailLastSync, prepareGmailClient } from '../lib/gmailSync'
 import {
@@ -11,7 +11,6 @@ import {
   parseStockReport,
   type MaintenanceImportResult,
   type StockImportResult,
-  type ImportMode,
 } from '../lib/csvImporter'
 import {
   parseInvoiceText,
@@ -20,11 +19,6 @@ import {
   type ParsedInvoice,
 } from '../lib/invoiceParser'
 import { db } from '../lib/db'
-import {
-  parseSalesReport,
-  detectJarvisReportType,
-  type SalesImportResult,
-} from '../lib/jarvismartImporter'
 
 function formatTime(d: Date): string {
   return d.toLocaleString('en-AU', {
@@ -208,7 +202,6 @@ function SmartRetailSection() {
   const [stockResult, setStockResult] = useState<StockImportResult | null>(null)
   const [error, setError] = useState('')
   const [showAnomalies, setShowAnomalies] = useState(false)
-  const [importMode, setImportMode] = useState<ImportMode>('dairy')
 
   async function handleFiles(files: File[]) {
     setLoading(true)
@@ -227,7 +220,7 @@ function SmartRetailSection() {
         try {
           const type = await detectFromFile(file)
           if (type === 'item_maintenance') {
-            const r = await parseItemMaintenance(file, importMode)
+            const r = await parseItemMaintenance(file)
             if (!mergedMaint) {
               mergedMaint = r
             } else {
@@ -269,17 +262,6 @@ function SmartRetailSection() {
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-2 mb-2">
-        <span className="text-xs text-gray-600 font-medium shrink-0">Department:</span>
-        {(['dairy', 'liquor', 'all'] as const).map((m) => (
-          <button key={m} onClick={() => setImportMode(m)}
-            className={`px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-colors ${
-              importMode === m ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-            }`}>
-            {m === 'all' ? 'All' : m.charAt(0).toUpperCase() + m.slice(1)}
-          </button>
-        ))}
-      </div>
       <DropZone onFiles={handleFiles} loading={loading} label="Drop Smart Retail exports here" multiple
         fileCount={fileCount} progressCount={progressCount} />
 
@@ -846,138 +828,6 @@ function GmailSection() {
   )
 }
 
-// ─── JARVISmart Section ───────────────────────────────────────────────────────
-
-function JarviSmartSection() {
-  const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState<SalesImportResult | null>(null)
-  const [error, setError] = useState('')
-  const [showColumns, setShowColumns] = useState(false)
-  const [showAnomalies, setShowAnomalies] = useState(false)
-
-  async function handleFiles(files: File[]) {
-    setLoading(true)
-    setError('')
-    setResult(null)
-    try {
-      const file = files[0]!
-      // Peek at first rows to detect type
-      const { read, utils } = await import('xlsx')
-      let rows: Record<string, unknown>[]
-      const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
-      if (ext === 'xlsx' || ext === 'xls') {
-        const buf = await file.arrayBuffer()
-        const wb = read(buf, { type: 'array', sheetRows: 3 })
-        const ws = wb.Sheets[wb.SheetNames[0]]
-        rows = utils.sheet_to_json(ws, { defval: '', raw: false })
-      } else {
-        const text = await file.text()
-        const wb = read(text, { type: 'string', sheetRows: 3 })
-        const ws = wb.Sheets[wb.SheetNames[0]]
-        rows = utils.sheet_to_json(ws, { defval: '', raw: false })
-      }
-
-      const type = detectJarvisReportType(rows as Record<string, unknown>[])
-      if (type !== 'sales') {
-        setError('File does not look like a JARVISmart sales report. Expected columns: barcode/PLU, date, qty_sold.')
-        return
-      }
-
-      const res = await parseSalesReport(file)
-      setResult(res)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  return (
-    <div className="space-y-3">
-      <DropZone
-        onFiles={handleFiles}
-        loading={loading}
-        label="Drop JARVISmart sales export here"
-        accept=".csv,.xlsx,.xls"
-      />
-
-      {error && (
-        <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg">
-          <AlertTriangle size={15} className="text-red-500 shrink-0 mt-0.5" />
-          <p className="text-sm text-red-700">{error}</p>
-        </div>
-      )}
-
-      {result && (
-        <div className="p-3 bg-green-50 border border-green-200 rounded-lg space-y-1.5">
-          <div className="flex items-center gap-2">
-            <CheckCircle size={15} className="text-green-600" />
-            <span className="text-sm font-medium text-green-800">Sales data imported</span>
-          </div>
-          <div className="text-xs text-green-700 ml-5 space-y-0.5">
-            <p>✓ {result.newRecords} new records saved</p>
-            {result.duplicateUpdated > 0 && <p>↷ {result.duplicateUpdated} existing records updated</p>}
-            <p>✓ {result.matched} records matched to products</p>
-            {result.unmatched > 0 && (
-              <p className="text-amber-700">⚠ {result.unmatched} records have unmatched barcodes</p>
-            )}
-            {result.dateRange && (
-              <p className="text-green-600">
-                Date range: {result.dateRange.from} → {result.dateRange.to}
-              </p>
-            )}
-          </div>
-
-          {result.anomalies.length > 0 && (
-            <div className="mt-1.5">
-              <button
-                onClick={() => setShowAnomalies((v) => !v)}
-                className="flex items-center gap-1 text-xs text-amber-700 font-medium ml-5"
-              >
-                <AlertTriangle size={11} />
-                {result.anomalies.length} anomalies
-                {showAnomalies ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-              </button>
-              {showAnomalies && (
-                <ul className="mt-1 space-y-1 ml-5">
-                  {result.anomalies.map((a, i) => (
-                    <li key={i} className="text-xs text-amber-800 bg-amber-50 rounded p-1.5">{a}</li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          )}
-
-          {result.detectedColumns.length > 0 && (
-            <details className="mt-1.5 ml-5" open={showColumns} onToggle={(e) => setShowColumns((e.target as HTMLDetailsElement).open)}>
-              <summary className="text-xs text-gray-500 cursor-pointer select-none">
-                Column mapping ({result.detectedColumns.filter((c) => c.startsWith('✓')).length}/{result.detectedColumns.length} matched)
-              </summary>
-              <ul className="mt-1 space-y-0.5">
-                {result.detectedColumns.map((c, i) => (
-                  <li key={i} className={`text-[11px] ${c.startsWith('✓') ? 'text-green-700' : 'text-gray-400'}`}>{c}</li>
-                ))}
-              </ul>
-            </details>
-          )}
-
-          <p className="flex items-center gap-1 text-[11px] text-green-600 ml-5">
-            <Clock size={10} /> {formatTime(result.lastImportedAt)}
-          </p>
-        </div>
-      )}
-
-      <div className="rounded-lg bg-blue-50 border border-blue-100 p-3">
-        <p className="text-[11px] text-blue-700 font-medium mb-1">Required columns</p>
-        <p className="text-[11px] text-blue-600">
-          barcode/PLU · date · qty_sold — all other columns (sales_value, cogs, department) are optional.
-          Flexible naming: plu, pluno, item_no, sku, units_sold, sales_qty, etc.
-        </p>
-      </div>
-    </div>
-  )
-}
-
 // ─── Main ImportTab ───────────────────────────────────────────────────────────
 
 export default function ImportTab() {
@@ -1006,19 +856,6 @@ export default function ImportTab() {
           Upload a PDF or paste extracted invoice text. Saves line items and updates cost prices.
         </p>
         <InvoiceSection />
-      </section>
-
-      <div className="border-t border-gray-200" />
-
-      <section>
-        <div className="flex items-center gap-2 mb-2">
-          <BarChart2 size={18} className="text-indigo-600" />
-          <h2 className="text-base font-semibold text-gray-900">JARVISmart / POS Sales Data</h2>
-        </div>
-        <p className="text-xs text-gray-500 mb-3">
-          Import sales reports from JARVISmart (Smart Retail SQL bridge) to enable demand-based forecasting, GMROI and ABC analysis.
-        </p>
-        <JarviSmartSection />
       </section>
 
       <div className="border-t border-gray-200" />
