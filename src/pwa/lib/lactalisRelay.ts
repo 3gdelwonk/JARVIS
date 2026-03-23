@@ -9,7 +9,7 @@
  *   'jarvis-api-key'   — API key for authenticated access
  */
 
-const DEFAULT_RELAY_URL = 'http://192.168.20.100:3000'
+const DEFAULT_RELAY_URL = 'http://192.168.20.100:3100'
 const URL_KEY = 'jarvis-relay-url'
 const API_KEY_KEY = 'jarvis-api-key'
 
