@@ -12,6 +12,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import {
   AlertTriangle,
   ArrowLeft,
+  Camera,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
@@ -20,7 +21,9 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Search,
   ShoppingCart,
+  X,
 } from 'lucide-react'
 import { generateForecasts, getSettings, type Forecast } from '../lib/forecastEngine'
 import { db } from '../lib/db'
@@ -97,25 +100,41 @@ function SwipeableRow({ children, onDelete, enabled }: {
 }) {
   const rowRef = useRef<HTMLDivElement>(null)
   const startX = useRef(0)
+  const startY = useRef(0)
   const offsetX = useRef(0)
-  const dragging = useRef(false)
+  const swiping = useRef(false)
+  const decided = useRef(false)
 
   function handleTouchStart(e: React.TouchEvent) {
     if (!enabled) return
     startX.current = e.touches[0].clientX
+    startY.current = e.touches[0].clientY
     offsetX.current = 0
-    dragging.current = false
+    swiping.current = false
+    decided.current = false
     if (rowRef.current) rowRef.current.style.transition = ''
   }
 
   function handleTouchMove(e: React.TouchEvent) {
     if (!enabled) return
     const dx = e.touches[0].clientX - startX.current
+    const dy = e.touches[0].clientY - startY.current
+
+    // Decide direction once after 10px of movement
+    if (!decided.current && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
+      decided.current = true
+      swiping.current = Math.abs(dx) > Math.abs(dy)
+    }
+
+    if (!swiping.current) return
+
+    // Prevent vertical scroll while swiping horizontally
+    e.preventDefault()
+
     if (dx > 0) {
       offsetX.current = 0
     } else {
       offsetX.current = Math.max(dx, -DELETE_WIDTH)
-      dragging.current = Math.abs(dx) > 10
     }
     if (rowRef.current) {
       rowRef.current.style.transform = `translateX(${offsetX.current}px)`
@@ -130,6 +149,8 @@ function SwipeableRow({ children, onDelete, enabled }: {
     } else {
       rowRef.current.style.transform = 'translateX(0)'
     }
+    swiping.current = false
+    decided.current = false
   }
 
   function handleDelete() {
@@ -156,6 +177,7 @@ function SwipeableRow({ children, onDelete, enabled }: {
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
+        style={{ touchAction: 'pan-y' }}
         className="relative bg-white"
       >
         {children}
@@ -248,8 +270,8 @@ const ForecastRow = memo(function ForecastRow({ forecast: f, qty, onChange, imag
           </button>
 
           {editing ? (
-            <input ref={inputRef} type="number" min={0} value={inputVal}
-              onChange={(e) => setInputVal(e.target.value)}
+            <input ref={inputRef} type="text" inputMode="numeric" pattern="[0-9]*" value={inputVal}
+              onChange={(e) => setInputVal(e.target.value.replace(/[^0-9]/g, ''))}
               onBlur={commitEdit}
               onKeyDown={(e) => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') { inputRef.current?.blur(); setEditing(false) } }}
               className="w-12 text-center text-sm font-semibold border border-blue-400 rounded py-0.5 outline-none" />
@@ -370,7 +392,7 @@ function OrderDetailView({ orderId, onBack }: OrderDetailProps) {
     )
   }
 
-  const isEditable = order.status === 'approved'
+  const isEditable = order.status === 'draft' || order.status === 'approved'
   const activeLines = lines.filter((l) => l.approvedQty > 0)
   const totalCost = Math.round(activeLines.reduce((s, l) => s + l.lineTotal, 0) * 100) / 100
   const dateStr = new Date(order.createdAt).toLocaleDateString('en-AU', {
@@ -466,8 +488,8 @@ function OrderDetailView({ orderId, onBack }: OrderDetailProps) {
             </div>
           )}
 
-          {/* Submit button — approved orders */}
-          {order.status === 'approved' && (
+          {/* Submit button — draft/approved orders */}
+          {(order.status === 'draft' || order.status === 'approved') && (
             <div>
               <button
                 onClick={handleRelaySubmit}
@@ -574,6 +596,129 @@ interface BuildViewProps {
   onCancel: () => void
 }
 
+// ─── Barcode camera hook (from ScannerTab) ──────────────────────────────────
+
+const nativeBarcodeSupported = typeof (window as { BarcodeDetector?: unknown }).BarcodeDetector !== 'undefined'
+
+function useBarcodeCamera(onDetected: (barcode: string) => void) {
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const rafRef = useRef<number | null>(null)
+  const zxingControlsRef = useRef<{ stop: () => void } | null>(null)
+  const shouldScanRef = useRef(true)
+  const onDetectedRef = useRef(onDetected)
+  const [cameraError, setCameraError] = useState('')
+
+  useEffect(() => { onDetectedRef.current = onDetected })
+
+  async function startCamera() {
+    setCameraError('')
+    try {
+      let stream: MediaStream
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        })
+      } catch {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+        })
+      }
+      streamRef.current = stream
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream
+        await videoRef.current.play()
+      }
+      const videoTrack = stream.getVideoTracks()[0]
+      if (videoTrack) {
+        videoTrack.applyConstraints({ advanced: [{ focusMode: 'continuous' } as MediaTrackConstraintSet] }).catch(() => {})
+      }
+      if (nativeBarcodeSupported) {
+        runDetection()
+      } else {
+        runZxingDetection()
+      }
+    } catch (e) {
+      const name = (e as Error).name
+      if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+        setCameraError('Camera permission denied')
+      } else if (name === 'NotFoundError') {
+        setCameraError('No camera found')
+      } else {
+        setCameraError('Camera unavailable')
+      }
+    }
+  }
+
+  function stopCamera() {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    zxingControlsRef.current?.stop()
+    zxingControlsRef.current = null
+    streamRef.current?.getTracks().forEach((t) => t.stop())
+    streamRef.current = null
+  }
+
+  function runDetection() {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const detector = new (window as any).BarcodeDetector({
+      formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'qr_code'],
+    })
+    async function tick() {
+      if (!shouldScanRef.current) return
+      const video = videoRef.current
+      if (!video || video.readyState < 2) { rafRef.current = requestAnimationFrame(tick); return }
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const barcodes: any[] = await detector.detect(video)
+        if (barcodes.length > 0 && shouldScanRef.current) {
+          shouldScanRef.current = false
+          onDetectedRef.current(barcodes[0].rawValue)
+          return
+        }
+      } catch { /* detector not ready */ }
+      if (shouldScanRef.current) rafRef.current = requestAnimationFrame(tick)
+    }
+    rafRef.current = requestAnimationFrame(tick)
+  }
+
+  async function runZxingDetection() {
+    try {
+      const { BrowserMultiFormatReader } = await import('@zxing/browser')
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const hints = new Map<any, unknown>([[3, true]])
+      const reader = new BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 100 })
+      const controls = await reader.decodeFromVideoElement(
+        videoRef.current!,
+        (result) => {
+          if (result && shouldScanRef.current) {
+            shouldScanRef.current = false
+            onDetectedRef.current(result.getText())
+          }
+        },
+      )
+      zxingControlsRef.current = controls
+    } catch { /* ZXing unavailable */ }
+  }
+
+  function resumeScanning() {
+    shouldScanRef.current = true
+    if (streamRef.current) {
+      if (nativeBarcodeSupported) {
+        if (rafRef.current) cancelAnimationFrame(rafRef.current)
+        if (videoRef.current?.paused) videoRef.current.play().catch(() => {})
+        runDetection()
+      } else {
+        zxingControlsRef.current?.stop()
+        zxingControlsRef.current = null
+        runZxingDetection()
+      }
+    }
+  }
+
+  return { videoRef, cameraError, startCamera, stopCamera, resumeScanning, shouldScanRef, streamRef }
+}
+
 function BuildView({ onApproved, onCancel }: BuildViewProps) {
   const [forecasts, setForecasts] = useState<Forecast[]>([])
   const [qtys, setQtys] = useState<Map<number, number>>(new Map())
@@ -581,9 +726,74 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
   const [approving, setApproving] = useState(false)
   const [showOk, setShowOk] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [showCamera, setShowCamera] = useState(false)
+  const [scanToast, setScanToast] = useState<string | null>(null)
+  const [highlightProductId, setHighlightProductId] = useState<number | null>(null)
+  const rowRefs = useRef<Map<number, HTMLDivElement>>(new Map())
+
+  // Product barcode map for scanner lookup
+  const productBarcodeMap = useLiveQuery(
+    () => db.products.toArray().then((ps) => {
+      const m = new Map<string, number>()
+      for (const p of ps) {
+        if (p.barcode) m.set(p.barcode, p.id!)
+        if (p.invoiceCode) m.set(p.invoiceCode, p.id!)
+      }
+      return m
+    }),
+    [],
+  )
+
+  // Barcode scanner
+  const handleBarcodeScan = useCallback((barcode: string) => {
+    const productId = productBarcodeMap?.get(barcode)
+    const match = productId != null ? forecasts.find((f) => f.productId === productId) : null
+    // Also try matching by invoiceCode on forecasts directly
+    const matchByCode = match ?? forecasts.find((f) => f.invoiceCode === barcode)
+    const found = matchByCode
+    if (found) {
+      setQtys((prev) => {
+        const next = new Map(prev)
+        if ((next.get(found.productId) ?? 0) === 0) next.set(found.productId, 1)
+        return next
+      })
+      setHighlightProductId(found.productId)
+      setTimeout(() => setHighlightProductId(null), 2000)
+      setTimeout(() => {
+        rowRefs.current.get(found.productId)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }, 100)
+      setShowCamera(false)
+      setScanToast(`Found: ${found.productName}`)
+      setTimeout(() => setScanToast(null), 2500)
+    } else {
+      setScanToast(`No product found for barcode ${barcode}`)
+      setTimeout(() => setScanToast(null), 2500)
+      cam.resumeScanning()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [forecasts, productBarcodeMap])
+
+  const cam = useBarcodeCamera(handleBarcodeScan)
+
+  useEffect(() => {
+    if (showCamera) {
+      cam.startCamera()
+    } else {
+      cam.stopCamera()
+    }
+    return () => { cam.stopCamera() }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showCamera])
 
   const productImageMap = useLiveQuery(
     () => db.products.toArray().then((ps) => new Map(ps.map((p) => [p.id!, p.imageUrl ?? '']))),
+    [],
+  )
+
+  // Barcode by productId for search
+  const productBarcodeById = useLiveQuery(
+    () => db.products.toArray().then((ps) => new Map(ps.map((p) => [p.id!, p.barcode ?? '']))),
     [],
   )
 
@@ -604,7 +814,7 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
       setQtys((prev) => {
         const next = new Map(prev)
         for (const f of results) {
-          if (!next.has(f.productId)) next.set(f.productId, f.suggestedQty)
+          if (!next.has(f.productId)) next.set(f.productId, 0)
         }
         return next
       })
@@ -651,8 +861,7 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
       const orderId = (await db.orders.add({
         deliveryDate: deliveryDateStr,
         createdAt: new Date(),
-        approvedAt: new Date(),
-        status: 'approved',
+        status: 'draft',
         totalCostEstimate: Math.round(totalCost * 100) / 100,
       })) as number
 
@@ -727,38 +936,130 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
         </div>
       </div>
 
-      {/* Forecast list */}
-      <div className="flex-1 overflow-auto pb-24">
-        {URGENCY_ORDER.map((urgency) => {
-          const items = grouped[urgency]
-          if (items.length === 0) return null
-          const isOk = urgency === 'ok'
-
-          return (
-            <div key={urgency}>
-              <button
-                onClick={() => isOk && setShowOk((v) => !v)}
-                className={`w-full flex items-center justify-between px-3 py-2 border-b sticky top-0 z-10 ${URGENCY_HEADER[urgency]}`}
-              >
-                <div className="flex items-center gap-2">
-                  {urgency === 'critical' && <AlertTriangle size={13} />}
-                  {urgency === 'ok' && <CheckCircle2 size={13} />}
-                  <span className="text-xs font-semibold">{URGENCY_LABEL[urgency]}</span>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${URGENCY_PILL[urgency]}`}>
-                    {items.length}
-                  </span>
-                </div>
-                {isOk && (showOk ? <ChevronUp size={14} /> : <ChevronDown size={14} />)}
+      {/* Search + Camera bar */}
+      <div className="px-3 py-2 border-b border-gray-100 bg-white shrink-0 space-y-2">
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              type="search"
+              placeholder="Search name, barcode, item #…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-8 pr-8 py-1.5 border border-gray-300 rounded-lg text-sm"
+            />
+            {searchQuery && (
+              <button onClick={() => setSearchQuery('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400">
+                <X size={14} />
               </button>
+            )}
+          </div>
+          <button
+            onClick={() => setShowCamera((v) => !v)}
+            className={`p-2 rounded-lg border ${showCamera ? 'bg-blue-50 border-blue-300 text-blue-600' : 'border-gray-300 text-gray-500'}`}
+            aria-label="Scan barcode"
+          >
+            <Camera size={18} />
+          </button>
+        </div>
 
-              {(!isOk || showOk) && items.map((f) => (
-                <ForecastRow key={f.productId} forecast={f} qty={qtys.get(f.productId) ?? 0}
-                  onChange={setQty} imageUrl={productImageMap?.get(f.productId)} />
-              ))}
+        {/* Camera overlay */}
+        {showCamera && (
+          <div className="relative rounded-lg overflow-hidden bg-black" style={{ height: 180 }}>
+            <video ref={cam.videoRef} playsInline muted className="w-full h-full object-cover" />
+            {cam.cameraError && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/70">
+                <p className="text-xs text-red-400 text-center px-4">{cam.cameraError}</p>
+              </div>
+            )}
+            <button onClick={() => setShowCamera(false)}
+              className="absolute top-2 right-2 bg-black/50 text-white rounded-full p-1">
+              <X size={14} />
+            </button>
+            <div className="absolute inset-x-4 top-1/2 -translate-y-1/2 h-0.5 bg-red-500/60 rounded" />
+          </div>
+        )}
+      </div>
+
+      {/* Scan toast */}
+      {scanToast && (
+        <div className="mx-3 mt-2 px-3 py-2 rounded-lg bg-gray-800 text-white text-xs text-center">
+          {scanToast}
+        </div>
+      )}
+
+      {/* Forecast list */}
+      {(() => {
+        const query = searchQuery.trim().toLowerCase()
+        const isSearching = query.length > 0
+        const words = query.split(/\s+/).filter(Boolean)
+
+        // When searching: flat filtered list. Otherwise: urgency groups
+        if (isSearching) {
+          const filtered = forecasts.filter((f) => {
+            const name = f.productName.toLowerCase()
+            const code = f.invoiceCode.toLowerCase()
+            const item = f.itemNumber.toLowerCase()
+            const barcode = (productBarcodeById?.get(f.productId) ?? '').toLowerCase()
+            return words.every((w) => name.includes(w) || code.includes(w) || item.includes(w) || barcode.includes(w))
+          })
+          return (
+            <div className="flex-1 overflow-auto pb-24">
+              {filtered.length === 0 ? (
+                <div className="py-8 text-center">
+                  <p className="text-sm text-gray-400">No products match &ldquo;{searchQuery}&rdquo;</p>
+                </div>
+              ) : (
+                filtered.map((f) => (
+                  <div key={f.productId} ref={(el) => { if (el) rowRefs.current.set(f.productId, el) }}
+                    className={highlightProductId === f.productId ? 'ring-2 ring-blue-400 ring-inset bg-blue-50 transition-all' : ''}>
+                    <ForecastRow forecast={f} qty={qtys.get(f.productId) ?? 0}
+                      onChange={setQty} imageUrl={productImageMap?.get(f.productId)} />
+                  </div>
+                ))
+              )}
             </div>
           )
-        })}
-      </div>
+        }
+
+        return (
+          <div className="flex-1 overflow-auto pb-24">
+            {URGENCY_ORDER.map((urgency) => {
+              const items = grouped[urgency]
+              if (items.length === 0) return null
+              const isOk = urgency === 'ok'
+
+              return (
+                <div key={urgency}>
+                  <button
+                    onClick={() => isOk && setShowOk((v) => !v)}
+                    className={`w-full flex items-center justify-between px-3 py-2 border-b sticky top-0 z-10 ${URGENCY_HEADER[urgency]}`}
+                  >
+                    <div className="flex items-center gap-2">
+                      {urgency === 'critical' && <AlertTriangle size={13} />}
+                      {urgency === 'ok' && <CheckCircle2 size={13} />}
+                      <span className="text-xs font-semibold">{URGENCY_LABEL[urgency]}</span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${URGENCY_PILL[urgency]}`}>
+                        {items.length}
+                      </span>
+                    </div>
+                    {isOk && (showOk ? <ChevronUp size={14} /> : <ChevronDown size={14} />)}
+                  </button>
+
+                  {(!isOk || showOk) && items.map((f) => (
+                    <div key={f.productId} ref={(el) => { if (el) rowRefs.current.set(f.productId, el) }}
+                      className={highlightProductId === f.productId ? 'ring-2 ring-blue-400 ring-inset bg-blue-50 transition-all' : ''}>
+                      <ForecastRow forecast={f} qty={qtys.get(f.productId) ?? 0}
+                        onChange={setQty} imageUrl={productImageMap?.get(f.productId)} />
+                    </div>
+                  ))}
+                </div>
+              )
+            })}
+          </div>
+        )
+      })()}
 
       {/* Summary + Done bar */}
       <div
