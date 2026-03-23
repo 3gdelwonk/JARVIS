@@ -1,18 +1,25 @@
-# Deploy Lactalis Relay Update to JARVISmart
+# Deploy to JARVISmart Server
 
 ## Context
 
-This deploys the minimal-login Lactalis session architecture to the JARVIS server.
-The source files are in this directory (`jarvissmart-relay/`).
-The target is the JARVIS server at `C:\Users\Admin\OneDrive\Desktop\JARVIS\jarvis`.
+Deploy three relay files from this directory to the JARVIS server:
+1. **lactalis-session.js** — Minimal-login Lactalis session (Playwright per order, cached slots)
+2. **lactalis-routes.js** — Lactalis API routes
+3. **sync-routes.js** — Two-way cloud sync for PWA data across devices
+
+**Source:** `C:\Users\Admin\OneDrive\Desktop\IGA Milk Order\project\jarvissmart-relay\`
+**Target:** `C:\Users\Admin\OneDrive\Desktop\JARVIS\jarvis\`
+
+---
 
 ## Steps — Execute in order
 
-### 1. Copy the two JS files (overwrite existing)
+### 1. Copy the three JS files
 
 ```bash
 cp "C:/Users/Admin/OneDrive/Desktop/IGA Milk Order/project/jarvissmart-relay/lactalis-session.js" "C:/Users/Admin/OneDrive/Desktop/JARVIS/jarvis/services/lactalis-session.js"
 cp "C:/Users/Admin/OneDrive/Desktop/IGA Milk Order/project/jarvissmart-relay/lactalis-routes.js" "C:/Users/Admin/OneDrive/Desktop/JARVIS/jarvis/routes/lactalis.js"
+cp "C:/Users/Admin/OneDrive/Desktop/IGA Milk Order/project/jarvissmart-relay/sync-routes.js" "C:/Users/Admin/OneDrive/Desktop/JARVIS/jarvis/routes/sync.js"
 ```
 
 ### 2. Create the data directory for cookie/slot cache persistence
@@ -21,9 +28,23 @@ cp "C:/Users/Admin/OneDrive/Desktop/IGA Milk Order/project/jarvissmart-relay/lac
 mkdir -p "C:/Users/Admin/OneDrive/Desktop/JARVIS/jarvis/services/data"
 ```
 
-### 3. Remove the auto-login block from server.js
+### 3. Mount the sync route in server.js
 
-In `C:\Users\Admin\OneDrive\Desktop\JARVIS\jarvis\server.js`, find and **delete** this block (around lines 173-182):
+In `C:\Users\Admin\OneDrive\Desktop\JARVIS\jarvis\server.js`, find the route mounting section (around line 76) and add the sync route **after** the lactalis line:
+
+```js
+app.use('/api/sync', apiKeyAuth, require('./routes/sync')(db, broadcast));
+```
+
+It should sit near:
+```js
+app.use('/api/lactalis', apiKeyAuth, require('./routes/lactalis')(db, broadcast));
+app.use('/api/sync', apiKeyAuth, require('./routes/sync')(db, broadcast));  // ← ADD THIS
+```
+
+### 4. Replace the Lactalis auto-login block in server.js
+
+Find this block (around lines 173-182):
 
 ```js
   // ── Lactalis session ──
@@ -48,63 +69,67 @@ Replace it with:
   }
 ```
 
-### 4. Verify no breaking changes
-
-The new `lactalis-session.js` exports: `login`, `submitOrder`, `getDeliverySlots`, `checkConnection`, `PORTAL_URL`.
-
-Removed exports (no longer needed): `ensureSession`, `isSessionValid`.
-
-Check that nothing else in the server imports those removed functions:
+### 5. Verify no breaking references
 
 ```bash
 grep -r "ensureSession\|isSessionValid" "C:/Users/Admin/OneDrive/Desktop/JARVIS/jarvis/" --include="*.js" | grep -v node_modules | grep -v lactalis-session.js
 ```
 
-This should return no results. If it does, those references need updating.
+Should return no results.
 
-### 5. Restart the server
+### 6. Restart the server
 
-If running via pm2:
+```bash
+cd "C:/Users/Admin/OneDrive/Desktop/JARVIS/jarvis" && node server.js
+```
+
+Or if using pm2:
 ```bash
 pm2 restart jarvis
 ```
 
-If running directly:
-```bash
-# Stop the current process, then:
-cd "C:/Users/Admin/OneDrive/Desktop/JARVIS/jarvis"
-node server.js
-```
+### 7. Verify deployment
 
-### 6. Verify deployment
+Test all three endpoints:
 
-Test the health endpoint (should respond instantly, no Playwright):
 ```bash
+# Lactalis health (instant, no Playwright)
 curl http://localhost:3000/api/lactalis/health
+
+# Sync status (should show empty tables)
+curl http://localhost:3000/api/sync/status
+
+# POS status (checks SmartRetail connection)
+curl http://localhost:3000/api/pos/status
 ```
 
-Expected response:
+Expected sync status response:
 ```json
 {
-  "configured": true,
-  "cookiesOnDisk": false,
-  "cookieAge": null,
-  "slotCacheAge": null,
-  "backoffActive": false,
-  "backoffFailures": 0,
-  "nextRetryIn": null
+  "tables": {},
+  "totalRecords": 0,
+  "lastActivity": null
 }
 ```
 
-`cookiesOnDisk: false` is expected on first run — cookies are saved after the first order or slot fetch.
+---
 
-## What changed
+## Files deployed
 
-| Before | After |
-|--------|-------|
-| Auto-login on startup | No login until needed |
-| Cookies in memory only | Cookies persisted to `services/data/lactalis-cookies.json` |
-| Delivery slots fetched live every time | Cached to `services/data/delivery-slots.json` (24h TTL) |
-| No failure backoff | Exponential backoff: 15s → 30m cap |
-| Cookie replay for orders | Full Playwright session per order (~15-25s) |
-| ~10-30 logins/week | ~4-10 logins/week at 3 orders/week |
+| Source file | Destination | Purpose |
+|-------------|-------------|---------|
+| `lactalis-session.js` | `services/lactalis-session.js` | Playwright session (minimal-login) |
+| `lactalis-routes.js` | `routes/lactalis.js` | Lactalis API endpoints |
+| `sync-routes.js` | `routes/sync.js` | Cloud sync push/pull/status |
+
+## Sync endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/sync/push` | Receive changed records from PWA |
+| GET | `/api/sync/pull?since=<ms>&deviceId=<id>` | Return records changed since timestamp |
+| GET | `/api/sync/status` | Record counts and last activity |
+
+All sync endpoints are protected by `apiKeyAuth` (same `JARVIS_API_KEY` used by the PWA).
+
+The sync table (`sync_records`) is auto-created on first request — no manual SQL needed.
