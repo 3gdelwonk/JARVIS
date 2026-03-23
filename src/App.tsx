@@ -21,28 +21,30 @@ const LAST_TAB_KEY = 'milk-manager-last-tab'
 // ─── Update banner ────────────────────────────────────────────────────────────
 
 function UpdateBanner() {
-  const { needRefresh: [needRefresh, setNeedRefresh], updateServiceWorker } = useRegisterSW()
+  const {
+    needRefresh: [needRefresh],
+    updateServiceWorker,
+  } = useRegisterSW({
+    onRegisteredSW(_url, registration) {
+      // Check for updates every 60s
+      if (registration) {
+        setInterval(() => { registration.update() }, 60_000)
+      }
+    },
+  })
+
+  // Auto-update: when new SW is ready, reload after a brief toast
+  useEffect(() => {
+    if (needRefresh) {
+      updateServiceWorker(true)
+    }
+  }, [needRefresh, updateServiceWorker])
 
   if (!needRefresh) return null
 
   return (
-    <div className="flex items-center justify-between px-4 py-2 bg-blue-600 text-white shrink-0 gap-3">
-      <p className="text-sm">Update available — new version ready.</p>
-      <div className="flex items-center gap-3 shrink-0">
-        <button
-          onClick={() => updateServiceWorker(true)}
-          className="text-sm font-semibold underline whitespace-nowrap"
-        >
-          Refresh now
-        </button>
-        <button
-          onClick={() => setNeedRefresh(false)}
-          className="text-white/70 text-lg leading-none"
-          aria-label="Dismiss"
-        >
-          ✕
-        </button>
-      </div>
+    <div className="flex items-center justify-center px-4 py-2 bg-blue-600 text-white shrink-0">
+      <p className="text-sm">Updating…</p>
     </div>
   )
 }

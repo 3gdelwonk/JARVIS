@@ -100,23 +100,29 @@ function LongPressRow({ children, onDelete, enabled }: {
 }) {
   const [showDelete, setShowDelete] = useState(false)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const movedRef = useRef(false)
+  const startPos = useRef({ x: 0, y: 0 })
 
   function clearTimer() {
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null }
   }
 
-  function handleTouchStart() {
+  function handleTouchStart(e: React.TouchEvent) {
     if (!enabled) return
-    movedRef.current = false
+    startPos.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }
+    clearTimer()
     timerRef.current = setTimeout(() => {
-      if (!movedRef.current) setShowDelete(true)
+      setShowDelete(true)
     }, HOLD_MS)
   }
 
-  function handleTouchMove() {
-    movedRef.current = true
-    clearTimer()
+  function handleTouchMove(e: React.TouchEvent) {
+    if (!timerRef.current) return
+    // Only cancel if finger moved more than 10px (ignore jitter)
+    const dx = e.touches[0].clientX - startPos.current.x
+    const dy = e.touches[0].clientY - startPos.current.y
+    if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+      clearTimer()
+    }
   }
 
   function handleTouchEnd() {
@@ -145,7 +151,8 @@ function LongPressRow({ children, onDelete, enabled }: {
 
       {/* Delete overlay — shown on long press */}
       {showDelete && (
-        <div className="absolute inset-0 flex items-center justify-end gap-2 px-3 bg-red-50/95 rounded-lg z-10">
+        <div className="absolute inset-0 flex items-center justify-end gap-2 px-3 bg-red-50/95 rounded-lg z-10"
+          style={{ WebkitUserSelect: 'none', userSelect: 'none' }}>
           <span className="flex-1 text-xs text-red-700 font-medium">Delete this item?</span>
           <button onClick={() => setShowDelete(false)}
             className="px-3 py-1.5 text-xs font-medium text-gray-600 bg-white border border-gray-200 rounded-lg">
