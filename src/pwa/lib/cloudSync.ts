@@ -95,7 +95,8 @@ async function syncFetch<T>(path: string, options?: RequestInit): Promise<T> {
 
 // ── Push ──
 
-const PUSH_BATCH_SIZE = 50
+// v2 — small batches to avoid 413
+const PUSH_BATCH_SIZE = 10
 
 export async function syncPush(): Promise<number> {
   const deviceId = getDeviceId()
@@ -135,7 +136,9 @@ export async function syncPush(): Promise<number> {
 
   if (allChanged.length === 0) return 0
 
-  // Send in batches to avoid 413
+  console.log(`[Sync] Pushing ${allChanged.length} records in ${Math.ceil(allChanged.length / PUSH_BATCH_SIZE)} batches`)
+
+  // Send in small batches to avoid 413
   for (let i = 0; i < allChanged.length; i += PUSH_BATCH_SIZE) {
     const batch = allChanged.slice(i, i + PUSH_BATCH_SIZE)
     const payload: Record<string, any[]> = {}
