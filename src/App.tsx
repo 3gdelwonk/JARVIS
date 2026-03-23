@@ -6,6 +6,7 @@ import { seedDatabase, backfillBakedImages } from './pwa/lib/db'
 import { applyStatusUpdates, applyExtensionSchedule, fetchCloudSchedule } from './pwa/lib/extensionSync'
 import { syncGmailOrders, isGmailConnected } from './pwa/lib/gmailSync'
 import { fullSync, startPeriodicSync } from './pwa/lib/cloudSync'
+import { syncPosData } from './pwa/lib/posSync'
 import Dashboard from './pwa/components/Dashboard'
 import OrderBuilder from './pwa/components/OrderBuilder'
 import MarginAnalysis from './pwa/components/MarginAnalysis'
@@ -134,6 +135,7 @@ export default function App() {
       ])
       setReady(true)
       // Non-blocking post-render syncs
+      syncPosData().catch(console.warn)
       fullSync().catch(console.warn)
       startPeriodicSync()
       fetchCloudSchedule().catch(console.error)
