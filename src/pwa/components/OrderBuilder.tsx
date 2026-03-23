@@ -98,60 +98,81 @@ function SwipeableRow({ children, onDelete, enabled }: {
   onDelete: () => void
   enabled: boolean
 }) {
+  const containerRef = useRef<HTMLDivElement>(null)
   const rowRef = useRef<HTMLDivElement>(null)
   const startX = useRef(0)
   const startY = useRef(0)
   const offsetX = useRef(0)
   const swiping = useRef(false)
   const decided = useRef(false)
+  const enabledRef = useRef(enabled)
+  enabledRef.current = enabled
 
-  function handleTouchStart(e: React.TouchEvent) {
-    if (!enabled) return
-    startX.current = e.touches[0].clientX
-    startY.current = e.touches[0].clientY
-    offsetX.current = 0
-    swiping.current = false
-    decided.current = false
-    if (rowRef.current) rowRef.current.style.transition = ''
-  }
+  // Attach touch listeners directly to the DOM with { passive: false }
+  // so that e.preventDefault() actually works on iOS Safari.
+  // React's onTouchMove is passive — preventDefault is silently ignored,
+  // and the browser starts scrolling before our JS can decide direction.
+  useEffect(() => {
+    const el = rowRef.current
+    if (!el) return
 
-  function handleTouchMove(e: React.TouchEvent) {
-    if (!enabled) return
-    const dx = e.touches[0].clientX - startX.current
-    const dy = e.touches[0].clientY - startY.current
-
-    // Decide direction once after 10px of movement
-    if (!decided.current && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
-      decided.current = true
-      swiping.current = Math.abs(dx) > Math.abs(dy)
-    }
-
-    if (!swiping.current) return
-
-    // Prevent vertical scroll while swiping horizontally
-    e.preventDefault()
-
-    if (dx > 0) {
+    function onTouchStart(e: TouchEvent) {
+      if (!enabledRef.current) return
+      startX.current = e.touches[0].clientX
+      startY.current = e.touches[0].clientY
       offsetX.current = 0
-    } else {
-      offsetX.current = Math.max(dx, -DELETE_WIDTH)
+      swiping.current = false
+      decided.current = false
+      el!.style.transition = ''
     }
-    if (rowRef.current) {
-      rowRef.current.style.transform = `translateX(${offsetX.current}px)`
-    }
-  }
 
-  function handleTouchEnd() {
-    if (!enabled || !rowRef.current) return
-    rowRef.current.style.transition = 'transform 0.2s ease'
-    if (Math.abs(offsetX.current) >= DELETE_WIDTH * 0.5) {
-      rowRef.current.style.transform = `translateX(-${DELETE_WIDTH}px)`
-    } else {
-      rowRef.current.style.transform = 'translateX(0)'
+    function onTouchMove(e: TouchEvent) {
+      if (!enabledRef.current) return
+      const dx = e.touches[0].clientX - startX.current
+      const dy = e.touches[0].clientY - startY.current
+
+      // Decide direction once after 8px of movement
+      if (!decided.current && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) {
+        decided.current = true
+        swiping.current = Math.abs(dx) > Math.abs(dy)
+      }
+
+      if (!swiping.current) return
+
+      // THIS is why we need { passive: false } — prevent scroll during swipe
+      e.preventDefault()
+      e.stopPropagation()
+
+      if (dx > 0) {
+        offsetX.current = 0
+      } else {
+        offsetX.current = Math.max(dx, -DELETE_WIDTH)
+      }
+      el!.style.transform = `translateX(${offsetX.current}px)`
     }
-    swiping.current = false
-    decided.current = false
-  }
+
+    function onTouchEnd() {
+      if (!enabledRef.current || !el) return
+      el.style.transition = 'transform 0.2s ease'
+      if (Math.abs(offsetX.current) >= DELETE_WIDTH * 0.5) {
+        el.style.transform = `translateX(-${DELETE_WIDTH}px)`
+      } else {
+        el.style.transform = 'translateX(0)'
+      }
+      swiping.current = false
+      decided.current = false
+    }
+
+    el.addEventListener('touchstart', onTouchStart, { passive: true })
+    el.addEventListener('touchmove', onTouchMove, { passive: false })
+    el.addEventListener('touchend', onTouchEnd, { passive: true })
+
+    return () => {
+      el.removeEventListener('touchstart', onTouchStart)
+      el.removeEventListener('touchmove', onTouchMove)
+      el.removeEventListener('touchend', onTouchEnd)
+    }
+  }, [])
 
   function handleDelete() {
     if (rowRef.current) {
@@ -163,7 +184,7 @@ function SwipeableRow({ children, onDelete, enabled }: {
   }
 
   return (
-    <div className="relative overflow-hidden">
+    <div ref={containerRef} className="relative overflow-hidden">
       {/* Red delete behind */}
       {enabled && (
         <div className="absolute right-0 top-0 bottom-0 flex items-center justify-center bg-red-500" style={{ width: DELETE_WIDTH }}>
@@ -173,13 +194,7 @@ function SwipeableRow({ children, onDelete, enabled }: {
         </div>
       )}
       {/* Sliding content */}
-      <div ref={rowRef}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
-        style={{ touchAction: 'pan-y' }}
-        className="relative bg-white"
-      >
+      <div ref={rowRef} className="relative bg-white">
         {children}
       </div>
     </div>
