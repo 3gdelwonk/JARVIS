@@ -4,29 +4,13 @@
 // Relays order submission and delivery slot queries
 // to mylactalis.com.au via Playwright sessions.
 //
-// Requires LACTALIS_API_KEY env var for authenticated access.
+// Auth handled by server.js apiKeyAuth middleware (JARVIS_API_KEY).
 
 const express = require('express');
 const lactalis = require('../services/lactalis-session');
 
-const API_KEY = process.env.LACTALIS_API_KEY || '';
-
 module.exports = function (db, broadcast) {
   const router = express.Router();
-
-  // ── API key middleware ──
-  // Protects all routes except /health (which returns limited info without auth)
-  function requireApiKey(req, res, next) {
-    if (!API_KEY) {
-      // No key configured = open access (backwards compat during setup)
-      return next();
-    }
-    const provided = req.headers['x-api-key'] || req.query.apiKey || '';
-    if (provided !== API_KEY) {
-      return res.status(401).json({ error: 'Invalid or missing API key' });
-    }
-    next();
-  }
 
   // GET /api/lactalis/health — session & system status (no Playwright)
   router.get('/health', (req, res) => {
@@ -39,7 +23,7 @@ module.exports = function (db, broadcast) {
   });
 
   // POST /api/lactalis/login — force a fresh Playwright login
-  router.post('/login', requireApiKey, async (req, res) => {
+  router.post('/login', async (req, res) => {
     try {
       await lactalis.login();
       res.json({ success: true, message: 'Logged in to Lactalis portal' });
@@ -50,7 +34,7 @@ module.exports = function (db, broadcast) {
 
   // POST /api/lactalis/submit-order — full Playwright session to submit
   // Body: { lines: [{ itemNumber: "801", qty: 3 }, ...] }
-  router.post('/submit-order', requireApiKey, async (req, res) => {
+  router.post('/submit-order', async (req, res) => {
     try {
       const { lines } = req.body;
       if (!Array.isArray(lines) || lines.length === 0) {
@@ -84,7 +68,7 @@ module.exports = function (db, broadcast) {
   });
 
   // GET /api/lactalis/delivery-slots — cached, refreshed every 24h
-  router.get('/delivery-slots', requireApiKey, async (req, res) => {
+  router.get('/delivery-slots', async (req, res) => {
     try {
       const data = await lactalis.getDeliverySlots();
       const nextAvailable = data.slots.find(s => s.status === 1) || null;
@@ -103,7 +87,7 @@ module.exports = function (db, broadcast) {
   });
 
   // GET /api/lactalis/refresh-slots — force slot cache refresh
-  router.get('/refresh-slots', requireApiKey, async (req, res) => {
+  router.get('/refresh-slots', async (req, res) => {
     try {
       const data = await lactalis.getDeliverySlots(true);
       const nextAvailable = data.slots.find(s => s.status === 1) || null;
