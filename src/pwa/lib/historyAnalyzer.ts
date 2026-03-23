@@ -185,24 +185,41 @@ export async function analyzeHistory(): Promise<{
     dayPattern[day] = (dayPattern[day] ?? 0) + 1
   }
 
-  // Weekly spend
+  // Weekly spend — from invoices + submitted/delivered orders (deduplicated)
   const weeklyMap = new Map<string, number>()
   for (const line of invoiceLines) {
     const wk = weekKey(line.deliveryDate)
     weeklyMap.set(wk, (weeklyMap.get(wk) ?? 0) + line.extendedPrice)
   }
+
+  // Merge submitted/delivered orders that don't have a matching invoice already counted
+  const orders = await db.orders.toArray()
+  const invoiceNums = new Set(allRecords.map((r) => r.documentNumber).filter(Boolean))
+  let orderSpend = 0
+  for (const order of orders) {
+    if (order.status === 'draft' || order.status === 'cancelled') continue
+    if (order.invoiceNumber && invoiceNums.has(order.invoiceNumber)) continue
+    const cost = order.totalCostActual ?? order.totalCostEstimate
+    if (cost > 0) {
+      const wk = weekKey(order.deliveryDate)
+      weeklyMap.set(wk, (weeklyMap.get(wk) ?? 0) + cost)
+      orderSpend += cost
+    }
+  }
+
   const weeklySpend = [...weeklyMap.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([week, spend]) => ({ week, spend: Math.round(spend * 100) / 100 }))
 
+  const totalSpendCombined = allSpend + orderSpend
   const uniqueWeeks = weeklySpend.length
-  const weeklyAvgSpend = uniqueWeeks > 0 ? allSpend / uniqueWeeks : 0
+  const weeklyAvgSpend = uniqueWeeks > 0 ? totalSpendCombined / uniqueWeeks : 0
 
   const overall: OverallStats = {
     totalInvoices: allRecords.filter((r) => r.documentType === 'invoice').length,
     totalDeliveries,
     totalLineItems: invoiceLines.length,
-    totalSpend: Math.round(allSpend * 100) / 100,
+    totalSpend: Math.round(totalSpendCombined * 100) / 100,
     avgSpendPerDelivery: totalDeliveries > 0 ? Math.round((allSpend / totalDeliveries) * 100) / 100 : 0,
     weeklyAvgSpend: Math.round(weeklyAvgSpend * 100) / 100,
     dateRange: allDeliveryDates.length
