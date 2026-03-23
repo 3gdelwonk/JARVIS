@@ -48,9 +48,18 @@ async function relayFetch<T>(path: string, options?: RequestInit): Promise<T> {
 
 // ── Health check ──
 
-interface HealthResponse {
+export interface HealthResponse {
   connected: boolean
   reason?: string
+  // New minimal-login fields
+  configured?: boolean
+  cookiesOnDisk?: boolean
+  cookieAge?: string
+  slotCacheAge?: string
+  backoffActive?: boolean
+  backoffFailures?: number
+  nextRetryIn?: string
+  // Legacy fields
   sessionCookies?: number
   expiresIn?: string
 }
@@ -58,7 +67,27 @@ interface HealthResponse {
 export async function checkRelay(): Promise<HealthResponse> {
   try {
     const data = await relayFetch<any>('/api/lactalis/health')
-    // Handle JARVISmart format: { session: { valid, cookieCount, expiresIn } }
+
+    // New minimal-login format: { configured, cookiesOnDisk, cookieAge, ... }
+    if ('configured' in data) {
+      return {
+        connected: !!data.configured && !data.backoffActive,
+        configured: data.configured,
+        cookiesOnDisk: data.cookiesOnDisk,
+        cookieAge: data.cookieAge,
+        slotCacheAge: data.slotCacheAge,
+        backoffActive: data.backoffActive,
+        backoffFailures: data.backoffFailures,
+        nextRetryIn: data.nextRetryIn,
+        reason: data.backoffActive
+          ? `Login cooling down — retry in ${data.nextRetryIn}`
+          : !data.configured
+            ? 'Credentials not configured'
+            : undefined,
+      }
+    }
+
+    // JARVISmart format: { session: { valid, cookieCount, expiresIn } }
     if (data.session) {
       return {
         connected: !!data.session.valid,
@@ -69,7 +98,8 @@ export async function checkRelay(): Promise<HealthResponse> {
         reason: data.session.valid ? undefined : 'Session invalid',
       }
     }
-    // Handle JARVIS format: { connected, sessionCookies, expiresIn }
+
+    // Legacy JARVIS format: { connected, sessionCookies, expiresIn }
     return data as HealthResponse
   } catch (err: any) {
     return { connected: false, reason: err.message }
@@ -109,8 +139,14 @@ interface SlotsResponse {
   slots: DeliverySlot[]
   nextDelivery: DeliverySlot | null
   count: number
+  cachedAt?: string
+  stale?: boolean
 }
 
 export async function getDeliverySlots(): Promise<SlotsResponse> {
   return relayFetch<SlotsResponse>('/api/lactalis/delivery-slots')
+}
+
+export async function refreshDeliverySlots(): Promise<SlotsResponse> {
+  return relayFetch<SlotsResponse>('/api/lactalis/refresh-slots')
 }
