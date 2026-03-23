@@ -1,18 +1,15 @@
 /**
- * SettingsSheet.tsx — App settings bottom sheet
+ * SettingsSheet.tsx — Forecast settings bottom sheet
  *
- * Sections:
- *  - Forecast (simple: Days of Stock + Order Adjustment w/ presets; advanced: Lead Time + Safety Stock + formula)
- *  - Gemini API Key
- *  - Gmail Sync
- *  - Store Info
- *  - Cloud & Extension (Worker URL + Lactalis Cloud Login + Bookmarklet)
- *  - Sync Status
- *  - Backup & Transfer
+ * Slide-up panel for adjusting ForecastSettings:
+ *  - Lead time days (1–3)
+ *  - Safety stock multiplier (0–3, step 0.1)
+ *  - Target days of stock (1–14)
+ *  - Global order multiplier (0.5–2.0, step 0.05)
  */
 
-import { useRef, useState, useEffect } from 'react'
-import { Clipboard, ChevronDown, ChevronRight, Download, RefreshCw, Upload, X, RotateCcw } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { Download, Upload, X, RotateCcw, Wifi } from 'lucide-react'
 import {
   getSettings,
   saveSettings,
@@ -20,8 +17,13 @@ import {
   type ForecastSettings,
 } from '../lib/forecastEngine'
 import { exportAllData, downloadBackup, importAllData } from '../lib/dataExport'
-import { applyExtensionSchedule, fetchCloudSchedule, getExtensionStatus, triggerScheduleRefresh, loginToCloud, isCloudLoggedIn, cloudLogout } from '../lib/extensionSync'
-import { db } from '../lib/db'
+import {
+  getRelayUrl,
+  setRelayUrl,
+  getApiKey,
+  setApiKey,
+  checkRelay,
+} from '../lib/lactalisRelay'
 
 interface Props {
   onClose: () => void
@@ -29,122 +31,39 @@ interface Props {
 
 export default function SettingsSheet({ onClose }: Props) {
   const [s, setS] = useState<ForecastSettings>(() => getSettings())
-  const [advancedOpen, setAdvancedOpen] = useState(false)
   const [backupStatus, setBackupStatus] = useState<string | null>(null)
-  const [transferJson, setTransferJson] = useState<string | null>(null)
-  const [hasCopied, setHasCopied] = useState(false)
-  const [pasteMode, setPasteMode] = useState(false)
-  const [pastedText, setPastedText] = useState('')
-  const [pasteError, setPasteError] = useState<string | null>(null)
   const restoreInputRef = useRef<HTMLInputElement>(null)
-  const [gmailClientId, setGmailClientId] = useState(() => localStorage.getItem('milk-manager-gmail-client-id') ?? '')
-  const [gmailClientIdSaved, setGmailClientIdSaved] = useState(false)
-  const [gmailAutoSync, setGmailAutoSync] = useState(() => localStorage.getItem('milk-manager-gmail-auto-sync') === 'true')
-  const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem('milk-manager-gemini-key') ?? '')
-  const [geminiKeySaved, setGeminiKeySaved] = useState(false)
-  const [storeName, setStoreName] = useState(() => localStorage.getItem('milk-manager-store-name') ?? '')
-  const [lactalisEmail, setLactalisEmail] = useState(() => localStorage.getItem('milk-manager-lactalis-email') ?? '')
-  const [storeInfoSaved, setStoreInfoSaved] = useState(false)
-  const [workerUrl, setWorkerUrl] = useState(() => localStorage.getItem('milk-manager-worker-url') ?? '')
-  const [workerUrlSaved, setWorkerUrlSaved] = useState(false)
-  const [extSecret, setExtSecret] = useState(() => localStorage.getItem('milk-manager-ext-secret') ?? '')
-  const [extSecretSaved, setExtSecretSaved] = useState(false)
-  const [bookmarkletCopied, setBookmarkletCopied] = useState(false)
 
-  // Cloud login
-  const [lactalisUser, setLactalisUser] = useState('')
-  const [lactalisPass, setLactalisPass] = useState('')
-  const [cloudLoggedIn, setCloudLoggedIn] = useState(() => isCloudLoggedIn())
-  const [loginStatus, setLoginStatus] = useState<string | null>(null)
-  const [loggingIn, setLoggingIn] = useState(false)
+  // JARVISmart relay settings
+  const [relayUrl, setRelayUrlState] = useState(() => getRelayUrl())
+  const [apiKey, setApiKeyState] = useState(() => getApiKey())
+  const [relayStatus, setRelayStatus] = useState<{ ok: boolean; msg: string } | null>(null)
+  const [relayChecking, setRelayChecking] = useState(false)
 
-  // Sync status
-  const [syncLog, setSyncLog] = useState<string[]>([])
-  const [syncing, setSyncing] = useState(false)
-  const [orderCount, setOrderCount] = useState<number | null>(null)
-  const [slotCount, setSlotCount] = useState<number | null>(null)
-  const [extConnected, setExtConnected] = useState<boolean | null>(null)
-
-  useEffect(() => {
-    db.orders.count().then(setOrderCount)
-    db.deliverySlots.count().then(setSlotCount)
-    getExtensionStatus().then((s) => setExtConnected(s.connected))
-  }, [])
-
-  async function handleSyncNow() {
-    setSyncing(true)
-    const log: string[] = []
-
-    // Check extension
-    const ext = await getExtensionStatus()
-    const hasWorkerUrl = !!localStorage.getItem('milk-manager-worker-url')?.trim()
-    setExtConnected(ext.connected)
-
-    if (ext.connected) {
-      log.push('Extension: connected')
-      log.push('Triggering extension to scrape schedule...')
-      triggerScheduleRefresh()
-      await new Promise((r) => setTimeout(r, 4000))
-      log.push('Waited 4s for scraper to complete')
-    } else if (hasWorkerUrl) {
-      log.push('Extension: not connected — using cloud relay')
-    } else {
-      log.push('Extension: not connected')
+  async function handleTestRelay() {
+    setRelayChecking(true)
+    setRelayStatus(null)
+    // Save current values before testing
+    setRelayUrl(relayUrl)
+    setApiKey(apiKey)
+    try {
+      const health = await checkRelay()
+      setRelayStatus(health.connected
+        ? { ok: true, msg: `Connected (${health.sessionCookies} cookies, expires ${health.expiresIn})` }
+        : { ok: false, msg: health.reason || 'Not connected' }
+      )
+    } catch (err: any) {
+      setRelayStatus({ ok: false, msg: err.message })
     }
-
-    // Bridge sync (only useful when extension is connected)
-    if (ext.connected) {
-      const hasSchedule = !!localStorage.getItem('milk-manager-schedule-from-extension')
-      log.push(`localStorage schedule: ${hasSchedule ? 'present' : 'empty'}`)
-
-      const bridgeSlots = await applyExtensionSchedule().catch(() => 0)
-      log.push(`Bridge schedule: ${bridgeSlots} slots applied`)
-    }
-
-    // Cloud schedule sync
-    const cloudSlots = await fetchCloudSchedule().catch(() => 0)
-    log.push(`Cloud schedule: ${cloudSlots} applied`)
-
-    // Update counts
-    const oc = await db.orders.count()
-    const sc = await db.deliverySlots.count()
-    setOrderCount(oc)
-    setSlotCount(sc)
-    log.push(`DB totals: ${oc} orders, ${sc} delivery slots`)
-
-    setSyncLog(log)
-    setSyncing(false)
+    setRelayChecking(false)
   }
 
   async function handleBackup() {
     try {
       setBackupStatus('Exporting…')
       const json = await exportAllData()
-      const date = new Date().toISOString().slice(0, 10)
-      const filename = `milk-manager-backup-${date}.json`
-      const blob = new Blob([json], { type: 'application/json' })
-
-      let shared = false
-      if (navigator.canShare?.({ files: [new File([blob], filename)] })) {
-        try {
-          await navigator.share({ files: [new File([blob], filename, { type: 'application/json' })], title: 'Milk Manager Backup' })
-          shared = true
-          localStorage.setItem('milk-manager-last-backup', new Date().toISOString())
-          setBackupStatus('Shared ✓')
-        } catch (shareErr) {
-          if ((shareErr as Error).name === 'AbortError') {
-            setBackupStatus(null)
-            return
-          }
-          // Share failed on desktop — fall through to download
-        }
-      }
-      if (!shared) {
-        downloadBackup(json)
-        localStorage.setItem('milk-manager-last-backup', new Date().toISOString())
-        setBackupStatus('Backup downloaded')
-        setTransferJson(json)
-      }
+      downloadBackup(json)
+      setBackupStatus('Backup downloaded')
     } catch (e) {
       setBackupStatus(`Error: ${(e as Error).message}`)
     }
@@ -161,33 +80,12 @@ export default function SettingsSheet({ onClose }: Props) {
       setBackupStatus('Restoring…')
       const text = await file.text()
       await importAllData(text)
-      setBackupStatus('Restore complete')
+      setBackupStatus('Restore complete — reload to see changes')
     } catch (err) {
       setBackupStatus(`Restore failed: ${(err as Error).message}`)
     }
     // Reset file input so same file can be re-selected
     e.target.value = ''
-  }
-
-  async function handleCopyJson() {
-    if (!transferJson) return
-    await navigator.clipboard.writeText(transferJson)
-    setHasCopied(true)
-    setTimeout(() => setHasCopied(false), 2000)
-  }
-
-  async function handlePasteImport() {
-    setPasteError(null)
-    try {
-      setBackupStatus('Restoring…')
-      await importAllData(pastedText)
-      setBackupStatus('Restore complete')
-      setPasteMode(false)
-      setPastedText('')
-    } catch (err) {
-      setPasteError(`Import failed: ${(err as Error).message}`)
-      setBackupStatus(null)
-    }
   }
 
   function set<K extends keyof ForecastSettings>(key: K, value: ForecastSettings[K]) {
@@ -196,6 +94,8 @@ export default function SettingsSheet({ onClose }: Props) {
 
   function handleSave() {
     saveSettings(s)
+    setRelayUrl(relayUrl)
+    setApiKey(apiKey)
     onClose()
   }
 
@@ -221,7 +121,7 @@ export default function SettingsSheet({ onClose }: Props) {
 
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-          <h2 className="text-base font-semibold text-gray-900">Settings</h2>
+          <h2 className="text-base font-semibold text-gray-900">Forecast Settings</h2>
           <button
             onClick={onClose}
             className="p-1.5 rounded-full hover:bg-gray-100 text-gray-500"
@@ -234,482 +134,174 @@ export default function SettingsSheet({ onClose }: Props) {
         {/* Controls */}
         <div className="px-4 py-4 space-y-5 overflow-y-auto max-h-[70vh]">
 
-          {/* ── Forecast ──────────────────────────────────── */}
+          {/* Lead time */}
           <div>
-            <p className="text-sm font-semibold text-gray-800 mb-3">Forecast</p>
-
-            {/* Days of Stock */}
-            <div className="mb-4">
-              <div className="flex justify-between items-baseline mb-1">
-                <label htmlFor="setting-target-days" className="text-sm font-medium text-gray-700">Days of Stock</label>
-                <span className="text-sm font-semibold text-blue-600">
-                  {s.targetDaysOfStock} days
-                </span>
-              </div>
-              <input
-                id="setting-target-days"
-                type="range"
-                min={1}
-                max={14}
-                step={1}
-                value={s.targetDaysOfStock}
-                onChange={(e) => set('targetDaysOfStock', Number(e.target.value))}
-                className="w-full accent-blue-600"
-              />
-              <p className="text-[11px] text-gray-400 mt-0.5">
-                How many days to keep on shelf after delivery
-              </p>
+            <div className="flex justify-between items-baseline mb-1">
+              <label htmlFor="setting-lead-time" className="text-sm font-medium text-gray-700">Lead Time</label>
+              <span className="text-sm font-semibold text-blue-600">
+                {s.leadTimeDays} day{s.leadTimeDays !== 1 ? 's' : ''}
+              </span>
             </div>
-
-            {/* Order Adjustment */}
-            <div className="mb-3">
-              <div className="flex justify-between items-baseline mb-1">
-                <label htmlFor="setting-global-mult" className="text-sm font-medium text-gray-700">Order Adjustment</label>
-                <span className="text-sm font-semibold text-blue-600">
-                  ×{s.globalMultiplier.toFixed(2)}
-                </span>
-              </div>
-              {/* Preset buttons */}
-              <div className="flex gap-1.5 mb-2">
-                {[0.75, 1.0, 1.25, 1.5].map((v) => (
-                  <button
-                    key={v}
-                    onClick={() => set('globalMultiplier', v)}
-                    className={`flex-1 py-1 text-xs font-medium rounded-lg border transition-colors ${
-                      s.globalMultiplier === v
-                        ? 'bg-blue-600 text-white border-blue-600'
-                        : 'border-gray-300 text-gray-600 hover:border-blue-300 hover:text-blue-600'
-                    }`}
-                  >
-                    ×{v.toFixed(2).replace('.00', '').replace(/(\.\d)0$/, '$1')}
-                  </button>
-                ))}
-              </div>
-              <input
-                id="setting-global-mult"
-                type="range"
-                min={0.5}
-                max={2.0}
-                step={0.05}
-                value={s.globalMultiplier}
-                onChange={(e) => set('globalMultiplier', Number(e.target.value))}
-                className="w-full accent-blue-600"
-              />
-              <div className="flex justify-between text-[10px] text-gray-400 mt-0.5">
-                <span>0.5× reduce</span>
-                <span>1.0 as forecast</span>
-                <span>2.0× double</span>
-              </div>
-            </div>
-
-            {/* Advanced expander */}
-            <button
-              onClick={() => setAdvancedOpen((o) => !o)}
-              className="flex items-center gap-1 text-xs text-blue-600 font-medium py-1 -ml-0.5"
-            >
-              {advancedOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-              Advanced
-            </button>
-
-            {advancedOpen && (
-              <div className="mt-3 space-y-4 pl-1 border-l-2 border-gray-100">
-                {/* Lead time */}
-                <div>
-                  <div className="flex justify-between items-baseline mb-1">
-                    <label htmlFor="setting-lead-time" className="text-sm font-medium text-gray-700">Lead Time</label>
-                    <span className="text-sm font-semibold text-blue-600">
-                      {s.leadTimeDays} day{s.leadTimeDays !== 1 ? 's' : ''}
-                    </span>
-                  </div>
-                  <input
-                    id="setting-lead-time"
-                    type="range"
-                    min={1}
-                    max={3}
-                    step={1}
-                    value={s.leadTimeDays}
-                    onChange={(e) => set('leadTimeDays', Number(e.target.value))}
-                    className="w-full accent-blue-600"
-                  />
-                  <p className="text-[11px] text-gray-400 mt-0.5">
-                    Days between order cutoff and delivery
-                  </p>
-                </div>
-
-                {/* Safety stock */}
-                <div>
-                  <div className="flex justify-between items-baseline mb-1">
-                    <label htmlFor="setting-safety-stock" className="text-sm font-medium text-gray-700">Safety Stock</label>
-                    <span className="text-sm font-semibold text-blue-600">
-                      ×{s.safetyStockMultiplier.toFixed(1)}
-                    </span>
-                  </div>
-                  <input
-                    id="setting-safety-stock"
-                    type="range"
-                    min={0}
-                    max={3}
-                    step={0.1}
-                    value={s.safetyStockMultiplier}
-                    onChange={(e) => set('safetyStockMultiplier', Number(e.target.value))}
-                    className="w-full accent-blue-600"
-                  />
-                  <p className="text-[11px] text-gray-400 mt-0.5">
-                    Buffer for demand spikes — higher = more cushion
-                  </p>
-                </div>
-
-                {/* Formula */}
-                <div className="bg-gray-50 rounded-lg p-3">
-                  <p className="text-[11px] text-gray-500 font-mono leading-relaxed">
-                    qty = (targetDays × avgDaily) + ({s.safetyStockMultiplier.toFixed(1)}σ × √{s.leadTimeDays}) − stock
-                    <br />
-                    × {s.globalMultiplier.toFixed(2)} adjustment
-                  </p>
-                </div>
-              </div>
-            )}
+            <input
+              id="setting-lead-time"
+              type="range"
+              min={1}
+              max={3}
+              step={1}
+              value={s.leadTimeDays}
+              onChange={(e) => set('leadTimeDays', Number(e.target.value))}
+              className="w-full accent-blue-600"
+            />
+            <p className="text-[11px] text-gray-400 mt-0.5">
+              Hours between placing order and delivery, expressed in days. Default: 1.
+            </p>
           </div>
 
-          {/* ── Gemini API Key ─────────────────────────────── */}
-          <div className="border-t border-gray-100 pt-4">
-            <p className="text-sm font-medium text-gray-700 mb-0.5">Gemini API Key</p>
-            <p className="text-[11px] text-gray-400 mb-2">
-              Used for invoice &amp; waste photo scanning. Free at{' '}
-              <a href="https://aistudio.google.com" target="_blank" rel="noopener noreferrer" className="text-blue-500 underline">
-                aistudio.google.com
-              </a>
-            </p>
+          {/* Safety stock multiplier */}
+          <div>
+            <div className="flex justify-between items-baseline mb-1">
+              <label htmlFor="setting-safety-stock" className="text-sm font-medium text-gray-700">Safety Stock Multiplier</label>
+              <span className="text-sm font-semibold text-blue-600">
+                ×{s.safetyStockMultiplier.toFixed(1)}
+              </span>
+            </div>
             <input
-              type="password"
-              placeholder="AIza..."
-              value={geminiKey}
-              onChange={(e) => setGeminiKey(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono mb-2"
+              id="setting-safety-stock"
+              type="range"
+              min={0}
+              max={3}
+              step={0.1}
+              value={s.safetyStockMultiplier}
+              onChange={(e) => set('safetyStockMultiplier', Number(e.target.value))}
+              className="w-full accent-blue-600"
             />
+            <div className="flex justify-between text-[10px] text-gray-400 mt-0.5">
+              <span>0 = no buffer</span>
+              <span>1.5 = FMCG standard</span>
+              <span>3 = very conservative</span>
+            </div>
+          </div>
+
+          {/* Target days of stock */}
+          <div>
+            <div className="flex justify-between items-baseline mb-1">
+              <label htmlFor="setting-target-days" className="text-sm font-medium text-gray-700">Target Days of Stock</label>
+              <span className="text-sm font-semibold text-blue-600">
+                {s.targetDaysOfStock} days
+              </span>
+            </div>
+            <input
+              id="setting-target-days"
+              type="range"
+              min={1}
+              max={14}
+              step={1}
+              value={s.targetDaysOfStock}
+              onChange={(e) => set('targetDaysOfStock', Number(e.target.value))}
+              className="w-full accent-blue-600"
+            />
+            <p className="text-[11px] text-gray-400 mt-0.5">
+              How many days of stock to carry after each delivery. Default: 4. Per-product
+              overrides take priority.
+            </p>
+          </div>
+
+          {/* Global multiplier */}
+          <div>
+            <div className="flex justify-between items-baseline mb-1">
+              <label htmlFor="setting-global-mult" className="text-sm font-medium text-gray-700">Global Order Multiplier</label>
+              <span className="text-sm font-semibold text-blue-600">
+                ×{s.globalMultiplier.toFixed(2)}
+              </span>
+            </div>
+            <input
+              id="setting-global-mult"
+              type="range"
+              min={0.5}
+              max={2.0}
+              step={0.05}
+              value={s.globalMultiplier}
+              onChange={(e) => set('globalMultiplier', Number(e.target.value))}
+              className="w-full accent-blue-600"
+            />
+            <div className="flex justify-between text-[10px] text-gray-400 mt-0.5">
+              <span>0.5× = reduce all</span>
+              <span>1.0 = as forecast</span>
+              <span>2.0× = double all</span>
+            </div>
+          </div>
+
+          {/* Formula reminder */}
+          <div className="bg-gray-50 rounded-lg p-3">
+            <p className="text-[11px] text-gray-500 font-mono leading-relaxed">
+              qty = (targetDays × avgDaily) + ({s.safetyStockMultiplier.toFixed(1)}σ × √{s.leadTimeDays}) − stock
+              <br />
+              × {s.globalMultiplier.toFixed(2)} global
+            </p>
+          </div>
+
+          {/* JARVISmart Connection */}
+          <div className="border-t border-gray-100 pt-4">
+            <p className="text-sm font-medium text-gray-700 mb-2">JARVISmart Connection</p>
+            <div className="space-y-3">
+              <div>
+                <label htmlFor="relay-url" className="text-[11px] text-gray-500 block mb-0.5">Server URL</label>
+                <input
+                  id="relay-url"
+                  type="url"
+                  value={relayUrl}
+                  onChange={(e) => setRelayUrlState(e.target.value)}
+                  placeholder="https://your-tunnel.trycloudflare.com"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                />
+              </div>
+              <div>
+                <label htmlFor="api-key" className="text-[11px] text-gray-500 block mb-0.5">API Key</label>
+                <input
+                  id="api-key"
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKeyState(e.target.value)}
+                  placeholder="jmart_milk_ak_..."
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono"
+                />
+              </div>
+              <button
+                onClick={handleTestRelay}
+                disabled={relayChecking}
+                className="flex items-center gap-1.5 px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 disabled:opacity-50"
+              >
+                <Wifi size={14} />
+                {relayChecking ? 'Testing…' : 'Test Connection'}
+              </button>
+              {relayStatus && (
+                <p className={`text-[11px] ${relayStatus.ok ? 'text-green-600' : 'text-red-500'}`}>
+                  {relayStatus.ok ? '✓' : '✗'} {relayStatus.msg}
+                </p>
+              )}
+              <p className="text-[11px] text-gray-400">
+                Enter your Cloudflare Tunnel URL for remote access, or LAN IP for in-store use.
+              </p>
+            </div>
+          </div>
+
+          {/* Backup / Restore */}
+          <div className="border-t border-gray-100 pt-4">
+            <p className="text-sm font-medium text-gray-700 mb-2">Data Backup</p>
             <div className="flex gap-2">
-              <button
-                onClick={() => {
-                  localStorage.setItem('milk-manager-gemini-key', geminiKey.trim())
-                  setGeminiKeySaved(true)
-                  setTimeout(() => setGeminiKeySaved(false), 2000)
-                }}
-                disabled={!geminiKey.trim()}
-                className="flex-1 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg disabled:opacity-40"
-              >
-                {geminiKeySaved ? 'Saved ✓' : 'Save Key'}
-              </button>
-              {geminiKey && (
-                <button
-                  onClick={() => { localStorage.removeItem('milk-manager-gemini-key'); setGeminiKey('') }}
-                  className="px-3 py-2 border border-red-200 text-red-600 text-sm rounded-lg"
-                >
-                  Remove
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* ── Gmail Sync ─────────────────────────────────── */}
-          <div className="border-t border-gray-100 pt-4">
-            <p className="text-sm font-medium text-gray-700 mb-0.5">Gmail Sync</p>
-            <p className="text-[11px] text-gray-400 mb-2">
-              OAuth Client ID from a Google Cloud project with the Gmail API enabled.
-              Add this app's origin as an authorised JavaScript origin.
-            </p>
-            <input
-              type="password"
-              placeholder="xxxxxx.apps.googleusercontent.com"
-              value={gmailClientId}
-              onChange={(e) => setGmailClientId(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono mb-2"
-            />
-            <button
-              onClick={() => {
-                localStorage.setItem('milk-manager-gmail-client-id', gmailClientId.trim())
-                setGmailClientIdSaved(true)
-                setTimeout(() => setGmailClientIdSaved(false), 2000)
-              }}
-              disabled={!gmailClientId.trim()}
-              className="w-full py-2 bg-blue-600 text-white text-sm font-medium rounded-lg disabled:opacity-40 mb-2"
-            >
-              {gmailClientIdSaved ? 'Saved ✓' : 'Save Client ID'}
-            </button>
-            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={gmailAutoSync}
-                onChange={(e) => {
-                  setGmailAutoSync(e.target.checked)
-                  localStorage.setItem('milk-manager-gmail-auto-sync', e.target.checked ? 'true' : 'false')
-                }}
-                className="accent-blue-600"
-              />
-              Auto-sync Gmail on app open
-            </label>
-          </div>
-
-          {/* ── Store Info ─────────────────────────────────── */}
-          <div className="border-t border-gray-100 pt-4">
-            <p className="text-sm font-medium text-gray-700 mb-0.5">Store Info</p>
-            <p className="text-[11px] text-gray-400 mb-2">
-              Used when generating claim emails to Lactalis.
-            </p>
-            <div className="flex flex-col gap-2 mb-2">
-              <input
-                type="text"
-                placeholder="Store name (e.g. IGA Camberwell)"
-                value={storeName}
-                onChange={(e) => setStoreName(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-              />
-              <input
-                type="email"
-                placeholder="Lactalis claims email"
-                value={lactalisEmail}
-                onChange={(e) => setLactalisEmail(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-              />
-              {!lactalisEmail && (
-                <p className="text-[11px] text-gray-400">Default: customer.service@lactalis.com.au</p>
-              )}
-            </div>
-            <button
-              onClick={() => {
-                localStorage.setItem('milk-manager-store-name', storeName.trim())
-                localStorage.setItem(
-                  'milk-manager-lactalis-email',
-                  lactalisEmail.trim() || 'customer.service@lactalis.com.au',
-                )
-                setStoreInfoSaved(true)
-                setTimeout(() => setStoreInfoSaved(false), 2000)
-              }}
-              className="w-full py-2 bg-blue-600 text-white text-sm font-medium rounded-lg"
-            >
-              {storeInfoSaved ? 'Saved ✓' : 'Save Store Info'}
-            </button>
-          </div>
-
-          {/* ── Cloud & Extension ──────────────────────────── */}
-          <div className="border-t border-gray-100 pt-4">
-            <p className="text-sm font-semibold text-gray-800 mb-3">Cloud &amp; Extension</p>
-
-            {/* Worker URL */}
-            <div className="mb-4">
-              <p className="text-sm font-medium text-gray-700 mb-0.5">Worker URL</p>
-              <p className="text-[11px] text-gray-400 mb-2">
-                Cloudflare Worker for schedule sync and order relay.
-              </p>
-              <input
-                type="text"
-                placeholder="https://your-worker.workers.dev"
-                value={workerUrl}
-                onChange={(e) => setWorkerUrl(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono mb-2"
-              />
-              <button
-                onClick={() => {
-                  const cleaned = workerUrl.replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').trim()
-                  localStorage.setItem('milk-manager-worker-url', cleaned)
-                  setWorkerUrl(cleaned)
-                  setWorkerUrlSaved(true)
-                  setTimeout(() => setWorkerUrlSaved(false), 2000)
-                }}
-                className="w-full py-2 bg-blue-600 text-white text-sm font-medium rounded-lg"
-              >
-                {workerUrlSaved ? 'Saved' : 'Save Worker URL'}
-              </button>
-            </div>
-
-            {/* Lactalis Cloud Login */}
-            <div className="mb-4">
-              <p className="text-sm font-medium text-gray-700 mb-0.5">Lactalis Login</p>
-              <p className="text-[11px] text-gray-400 mb-2">
-                Submit orders and sync schedule directly from your phone — no extension needed.
-              </p>
-              {cloudLoggedIn ? (
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2 text-sm text-green-600 font-medium">
-                    <span className="w-2 h-2 bg-green-500 rounded-full" />
-                    Cloud session active
-                  </div>
-                  <button
-                    onClick={() => { cloudLogout(); setCloudLoggedIn(false); setLoginStatus(null) }}
-                    className="w-full py-2 border border-red-200 text-red-600 text-sm font-medium rounded-lg"
-                  >
-                    Logout
-                  </button>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  <input
-                    type="text"
-                    placeholder="Lactalis username or email"
-                    value={lactalisUser}
-                    onChange={(e) => setLactalisUser(e.target.value)}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                    autoComplete="username"
-                  />
-                  <input
-                    type="password"
-                    placeholder="Password"
-                    value={lactalisPass}
-                    onChange={(e) => setLactalisPass(e.target.value)}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                    autoComplete="current-password"
-                  />
-                  <button
-                    onClick={async () => {
-                      if (!workerUrl.trim()) {
-                        setLoginStatus('Set Worker URL first')
-                        return
-                      }
-                      setLoggingIn(true)
-                      setLoginStatus(null)
-                      const result = await loginToCloud(lactalisUser.trim(), lactalisPass)
-                      setLoggingIn(false)
-                      if (result.success) {
-                        setCloudLoggedIn(true)
-                        setLoginStatus('Logged in')
-                        setLactalisPass('')
-                      } else {
-                        setLoginStatus(result.error ?? 'Login failed')
-                      }
-                    }}
-                    disabled={!lactalisUser.trim() || !lactalisPass || loggingIn}
-                    className="w-full py-2 bg-blue-600 text-white text-sm font-medium rounded-lg disabled:opacity-40"
-                  >
-                    {loggingIn ? 'Logging in...' : 'Login to Lactalis'}
-                  </button>
-                </div>
-              )}
-              {loginStatus && (
-                <p className={`text-[11px] mt-1.5 ${loginStatus === 'Logged in' ? 'text-green-600' : 'text-red-500'}`}>
-                  {loginStatus}
-                </p>
-              )}
-            </div>
-
-            {/* Bookmarklet */}
-            <div>
-              <p className="text-sm font-medium text-gray-700 mb-0.5">Bookmarklet</p>
-              <p className="text-[11px] text-gray-400 mb-2">
-                Sync schedules and submit orders from your phone browser.
-                Log into mylactalis.com.au, then tap the bookmarklet.
-              </p>
-              <input
-                type="password"
-                placeholder="Extension secret"
-                value={extSecret}
-                onChange={(e) => setExtSecret(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono mb-2"
-              />
-              <div className="flex gap-2 mb-2">
-                <button
-                  onClick={() => {
-                    localStorage.setItem('milk-manager-ext-secret', extSecret.trim())
-                    setExtSecretSaved(true)
-                    setTimeout(() => setExtSecretSaved(false), 2000)
-                  }}
-                  disabled={!extSecret.trim()}
-                  className="flex-1 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg disabled:opacity-40"
-                >
-                  {extSecretSaved ? 'Saved' : 'Save Secret'}
-                </button>
-                <button
-                  onClick={async () => {
-                    const w = workerUrl.trim() || localStorage.getItem('milk-manager-worker-url') || ''
-                    const k = extSecret.trim()
-                    if (!w || !k) return
-                    const configStr = JSON.stringify({ w, k }).replace(/'/g, "\\'")
-                    const js = `javascript:void(function(){window.__LACTALIS_BRIDGE_CONFIG__=${configStr};var s=document.createElement('script');s.src='https://3gdelwonk.github.io/JARVIS/lactalis-bridge.js';document.head.appendChild(s)})()`
-                    await navigator.clipboard.writeText(js)
-                    setBookmarkletCopied(true)
-                    setTimeout(() => setBookmarkletCopied(false), 2000)
-                  }}
-                  disabled={!workerUrl.trim() || !extSecret.trim()}
-                  className="flex-1 py-2 border border-blue-300 text-blue-600 text-sm font-medium rounded-lg disabled:opacity-40"
-                >
-                  {bookmarkletCopied ? 'Copied!' : 'Copy Bookmarklet'}
-                </button>
-              </div>
-              {(!workerUrl.trim() || !extSecret.trim()) && (
-                <p className="text-[11px] text-amber-600 mb-1">
-                  Set both Worker URL and Extension Secret above to generate the bookmarklet.
-                </p>
-              )}
-              <details className="text-[11px] text-gray-400">
-                <summary className="cursor-pointer text-blue-500">Installation instructions</summary>
-                <div className="mt-1.5 space-y-1">
-                  <p><strong>iOS Safari:</strong> Copy the bookmarklet, create any bookmark, edit it, and replace the URL with the copied text.</p>
-                  <p><strong>Android Chrome:</strong> Copy the bookmarklet, add any page as a bookmark, edit the bookmark, and replace the URL with the copied text.</p>
-                  <p>Then log into mylactalis.com.au and tap the bookmark to activate.</p>
-                </div>
-              </details>
-            </div>
-          </div>
-
-          {/* ── Sync Status ────────────────────────────────── */}
-          <div className="border-t border-gray-100 pt-4">
-            <p className="text-sm font-medium text-gray-700 mb-0.5">Sync Status</p>
-            <div className="text-[11px] text-gray-500 space-y-1 mb-2">
-              <div className="flex justify-between">
-                <span>Extension</span>
-                <span className={extConnected === null ? 'text-gray-300' : extConnected ? 'text-green-600 font-medium' : (workerUrl.trim() ? 'text-blue-500 font-medium' : 'text-red-500 font-medium')}>
-                  {extConnected === null ? '...' : extConnected ? 'Connected' : (workerUrl.trim() ? 'Cloud relay' : 'Not connected')}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span>Orders in DB</span>
-                <span className="font-medium text-gray-700">{orderCount ?? '...'}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Delivery Slots</span>
-                <span className="font-medium text-gray-700">{slotCount ?? '...'}</span>
-              </div>
-            </div>
-            <button
-              onClick={handleSyncNow}
-              disabled={syncing}
-              className="w-full flex items-center justify-center gap-1.5 py-2 border border-blue-200 bg-blue-50 text-blue-600 text-xs font-medium rounded-lg disabled:opacity-50"
-            >
-              <RefreshCw size={12} className={syncing ? 'animate-spin' : ''} />
-              {syncing ? 'Syncing...' : 'Sync Now'}
-            </button>
-            {syncLog.length > 0 && (
-              <div className="mt-2 bg-gray-50 rounded-lg p-2 max-h-32 overflow-auto">
-                {syncLog.map((line, i) => (
-                  <p key={i} className="text-[10px] text-gray-500 font-mono leading-relaxed">{line}</p>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* ── Backup & Transfer ──────────────────────────── */}
-          <div className="border-t border-gray-100 pt-4">
-            <p className="text-sm font-medium text-gray-700 mb-0.5">Backup &amp; Transfer</p>
-            <p className="text-[11px] text-gray-400 mb-2">Share your data to any device via AirDrop, Messages, or email</p>
-            <div className="flex gap-2 mb-2">
               <button
                 onClick={handleBackup}
                 className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-700"
               >
                 <Download size={14} />
-                Export &amp; Share
+                Export Backup
               </button>
               <button
-                onClick={() => { setPasteMode(false); handleRestoreClick() }}
-                className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 border rounded-lg text-sm ${!pasteMode ? 'border-gray-400 bg-gray-50 text-gray-800 font-medium' : 'border-gray-300 text-gray-700'}`}
+                onClick={handleRestoreClick}
+                className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-700"
               >
                 <Upload size={14} />
-                File
-              </button>
-              <button
-                onClick={() => setPasteMode((m) => !m)}
-                className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 border rounded-lg text-sm ${pasteMode ? 'border-blue-400 bg-blue-50 text-blue-700 font-medium' : 'border-gray-300 text-gray-700'}`}
-              >
-                <Clipboard size={14} />
-                Paste
+                Restore
               </button>
               <input
                 ref={restoreInputRef}
@@ -719,77 +311,10 @@ export default function SettingsSheet({ onClose }: Props) {
                 onChange={handleRestoreFile}
               />
             </div>
-            {pasteMode && (
-              <div className="space-y-1.5">
-                <textarea
-                  value={pastedText}
-                  onChange={(e) => setPastedText(e.target.value)}
-                  placeholder="Paste JSON backup here…"
-                  className="w-full h-24 text-[11px] font-mono border border-gray-200 rounded-lg p-2 resize-none text-gray-700"
-                />
-                {pasteError && <p className="text-[11px] text-red-500">{pasteError}</p>}
-                <button
-                  onClick={handlePasteImport}
-                  disabled={!pastedText.trim()}
-                  className="w-full py-2 bg-blue-600 text-white text-sm font-medium rounded-lg disabled:opacity-40"
-                >
-                  Import
-                </button>
-              </div>
-            )}
             {backupStatus && (
-              <div className="mt-1.5 flex items-center gap-2">
-                <p className="text-[11px] text-gray-500">{backupStatus}</p>
-                {backupStatus === 'Restore complete' && (
-                  <button
-                    onClick={() => window.location.reload()}
-                    className="text-[11px] bg-blue-600 text-white px-2 py-0.5 rounded"
-                  >
-                    Reload App
-                  </button>
-                )}
-              </div>
+              <p className="text-[11px] text-gray-500 mt-1.5">{backupStatus}</p>
             )}
           </div>
-
-          {/* Transfer to Phone modal */}
-          {transferJson && (
-            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setTransferJson(null)}>
-              <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl p-4" onClick={(e) => e.stopPropagation()}>
-                <div className="flex items-center justify-between mb-3">
-                  <p className="text-base font-semibold text-gray-900">Transfer to Phone</p>
-                  <button onClick={() => setTransferJson(null)} className="p-1 rounded-full hover:bg-gray-100 text-gray-500">
-                    <X size={18} />
-                  </button>
-                </div>
-
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Option A — Copy &amp; Paste</p>
-                <textarea
-                  readOnly
-                  value={transferJson}
-                  className="w-full h-16 text-[10px] font-mono border border-gray-200 rounded-lg p-2 resize-none text-gray-500 bg-gray-50"
-                />
-                <button
-                  onClick={handleCopyJson}
-                  className="mt-1.5 w-full flex items-center justify-center gap-2 py-2.5 bg-blue-600 text-white text-sm font-semibold rounded-xl"
-                >
-                  <Clipboard size={15} />
-                  {hasCopied ? 'Copied ✓' : 'Copy JSON to Clipboard'}
-                </button>
-                <p className="text-[11px] text-gray-400 mt-1.5">
-                  Paste into iMessage, WhatsApp, or email to yourself. Then on your phone: open the app → Backup → Paste.
-                </p>
-
-                <div className="border-t border-gray-100 mt-3 pt-3">
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Option B — File</p>
-                  <p className="text-[11px] text-gray-400">
-                    File already downloaded. Save it to iCloud Drive or Google Drive, then on your phone: open the app → Backup → Restore → pick the file.
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-
         </div>
 
         {/* Footer buttons */}

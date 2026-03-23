@@ -1,0 +1,134 @@
+/**
+ * posRelay.ts — JARVISmart POS relay client
+ *
+ * Fetches live stock levels, sales data, and top sellers from Smart Retail POS
+ * via the JARVISmart server's POS bridge (/api/pos/*).
+ *
+ * Uses the same relay URL and API key as lactalisRelay.ts (stored in localStorage).
+ */
+
+import { getRelayUrl, getApiKey } from './lactalisRelay'
+
+async function posFetch<T>(path: string, params?: Record<string, string>): Promise<T> {
+  const base = getRelayUrl()
+  const apiKey = getApiKey()
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  }
+  if (apiKey) headers['X-API-Key'] = apiKey
+
+  const url = new URL(`${base}/api/pos${path}`)
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== '') url.searchParams.set(k, v)
+    }
+  }
+
+  const res = await fetch(url.toString(), { headers })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }))
+    throw new Error(body.error || body.detail || `POS ${res.status}`)
+  }
+  return res.json() as Promise<T>
+}
+
+// ── POS Health ──
+
+interface PosStatus {
+  connected: boolean
+  reason?: string
+}
+
+export async function checkPos(): Promise<PosStatus> {
+  try {
+    return await posFetch<PosStatus>('/status')
+  } catch (err: any) {
+    return { connected: false, reason: err.message }
+  }
+}
+
+// ── Stock levels ──
+
+export interface StockItem {
+  itemCode: string
+  description: string
+  department: string
+  qoh: number
+  lastReceived?: string
+  lastSold?: string
+}
+
+interface StockResponse {
+  items: StockItem[]
+  count: number
+}
+
+export async function getStock(opts?: {
+  department?: string
+  itemCode?: string
+  lowStock?: boolean
+  limit?: number
+}): Promise<StockResponse> {
+  const params: Record<string, string> = {}
+  if (opts?.department) params.department = opts.department
+  if (opts?.itemCode) params.itemCode = opts.itemCode
+  if (opts?.lowStock !== undefined) params.lowStock = opts.lowStock ? '1' : '0'
+  if (opts?.limit !== undefined) params.limit = String(opts.limit)
+  return posFetch<StockResponse>('/stock', params)
+}
+
+// ── Sales ──
+
+export interface SalesSummary {
+  period: string
+  totalSales: number
+  totalTransactions: number
+  avgBasket?: number
+}
+
+export async function getSales(period: string = 'week'): Promise<SalesSummary> {
+  return posFetch<SalesSummary>('/sales', { period })
+}
+
+// ── Top sellers ──
+
+export interface TopSeller {
+  itemCode: string
+  description: string
+  qtySold: number
+  revenue: number
+}
+
+interface TopSellersResponse {
+  items: TopSeller[]
+  days: number
+}
+
+export async function getTopSellers(days: number = 7, limit: number = 20): Promise<TopSellersResponse> {
+  return posFetch<TopSellersResponse>('/top-sellers', {
+    days: String(days),
+    limit: String(limit),
+  })
+}
+
+// ── Search ──
+
+export interface SearchResult {
+  itemCode: string
+  description: string
+  department: string
+  qoh: number
+  price?: number
+}
+
+interface SearchResponse {
+  items: SearchResult[]
+  count: number
+}
+
+export async function searchItems(query: string, limit: number = 20): Promise<SearchResponse> {
+  return posFetch<SearchResponse>('/search', {
+    q: query,
+    limit: String(limit),
+  })
+}
