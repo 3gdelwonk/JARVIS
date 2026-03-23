@@ -283,7 +283,7 @@ export function schedulePush(delayMs = 500): void {
   }, delayMs)
 }
 
-export function startPeriodicSync(intervalMs = 5 * 60 * 1000): void {
+export function startPeriodicSync(intervalMs = 12 * 60 * 60 * 1000): void {
   if (periodicTimer) return
   periodicTimer = setInterval(() => {
     if (localStorage.getItem(AUTO_SYNC_KEY) === 'false') return

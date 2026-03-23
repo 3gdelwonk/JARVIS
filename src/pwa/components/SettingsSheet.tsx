@@ -415,7 +415,7 @@ export default function SettingsSheet({ onClose }: Props) {
                 </p>
               )}
               <p className="text-[11px] text-gray-400">
-                Device: {syncStatus.deviceId.slice(0, 8)}… · Syncs automatically every 5 min
+                Device: {syncStatus.deviceId.slice(0, 8)}… · Syncs automatically every 12 hours
               </p>
             </div>
           </div>
