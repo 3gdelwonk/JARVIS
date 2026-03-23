@@ -124,8 +124,8 @@ export async function syncPosData(days = 7): Promise<PosSyncResult> {
     return { posMap, snapshotsWritten: 0, salesWritten: 0, matched: 0, unmatched: 0 }
   }
 
-  const products = await db.products.where('active').equals(1).toArray()
-    .catch(() => db.products.toArray().then(ps => ps.filter(p => p.active)))
+  const allProducts = await db.products.toArray()
+  const products = allProducts.filter(p => p.active !== false)
 
   const today = new Date().toISOString().split('T')[0]
   const batchId = `pos_live_${today}`
