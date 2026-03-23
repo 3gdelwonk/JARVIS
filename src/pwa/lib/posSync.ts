@@ -183,15 +183,16 @@ export async function syncPosData(days = 7): Promise<PosSyncResult> {
       importBatchId: batchId,
     })
 
-    // Sales record (only if POS reports sales data)
-    if (item.qtySold > 0 || item.revenue > 0) {
+    // Sales record — write daily averages (not multi-day totals) so velocity
+    // calculations are correct from day one. Accuracy improves as daily syncs accumulate.
+    if (item.avgDailyVelocity > 0 || item.revenue > 0) {
       salesRecords.push({
         productId: product.id!,
         barcode: product.barcode,
         date: today,
-        qtySold: item.qtySold,
-        salesValue: item.revenue,
-        cogs: item.cost,
+        qtySold: Math.round(item.avgDailyVelocity * 100) / 100,
+        salesValue: Math.round((item.revenue / days) * 100) / 100,
+        cogs: Math.round((item.cost / days) * 100) / 100,
         department: product.department || 'dairy',
         importBatchId: batchId,
         importedAt: new Date(),
