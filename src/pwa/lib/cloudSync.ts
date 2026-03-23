@@ -242,9 +242,15 @@ export async function syncPull(): Promise<number> {
 // ── Full sync ──
 
 export async function fullSync(): Promise<{ pushed: number; pulled: number }> {
-  const pushed = await syncPush()
-  const pulled = await syncPull()
-  return { pushed, pulled }
+  try {
+    const pushed = await syncPush()
+    const pulled = await syncPull()
+    return { pushed, pulled }
+  } catch (err) {
+    console.warn('[Sync] fullSync failed:', (err as Error).message)
+    window.dispatchEvent(new CustomEvent('sync-error', { detail: (err as Error).message }))
+    throw err
+  }
 }
 
 // ── Auto-sync (debounced push + periodic full sync) ──

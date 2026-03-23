@@ -862,6 +862,15 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
         </div>
       )}
 
+      {/* POS status banner */}
+      {posMap.size === 0 && (
+        <div className="mx-3 mt-2 px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-lg">
+          <p className="text-[11px] text-amber-700">
+            Live POS data unavailable — using last known stock levels. Check JARVISmart connection in Settings.
+          </p>
+        </div>
+      )}
+
       {/* Forecast list */}
       {(() => {
         const query = searchQuery.trim().toLowerCase()
