@@ -14,15 +14,68 @@ import type { Product } from './types'
 
 // ── POS item matching ────────────────────────────────────────────────────────
 
-/** Match POS itemCode (e.g. "STR0019100") to a PWA product (itemNumber "19100") */
-export function posItemMatchesProduct(itemCode: string, product: Product): boolean {
-  if (product.itemNumber === itemCode) return true
-  return itemCode.replace(/^STR0*/, '') === product.itemNumber
-}
-
 /** Strip STR0* prefix for map key normalisation */
 export function stripPosPrefix(itemCode: string): string {
   return itemCode.replace(/^STR0*/, '')
+}
+
+/** Normalise a string for fuzzy comparison: lowercase, collapse whitespace, strip common noise */
+function normalise(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+/** Token-overlap similarity: intersection / min(tokensA, tokensB). Returns 0–1. */
+function tokenSimilarity(a: string, b: string): number {
+  const tokA = new Set(normalise(a).split(' ').filter(t => t.length > 1))
+  const tokB = new Set(normalise(b).split(' ').filter(t => t.length > 1))
+  if (tokA.size === 0 || tokB.size === 0) return 0
+  let overlap = 0
+  for (const t of tokA) if (tokB.has(t)) overlap++
+  return overlap / Math.min(tokA.size, tokB.size)
+}
+
+const FUZZY_THRESHOLD = 0.6
+
+/**
+ * Match POS item to PWA product. Priority:
+ * 1. Exact itemCode match (strip STR0* prefix)
+ * 2. Barcode match
+ * 3. Fuzzy description match (token overlap ≥ 60%)
+ */
+export function findMatchingProduct(
+  item: ItemPerformance,
+  products: Product[],
+): Product | null {
+  const stripped = stripPosPrefix(item.itemCode)
+
+  // 1. Exact code match
+  for (const p of products) {
+    if (p.itemNumber === stripped || p.itemNumber === item.itemCode) return p
+  }
+
+  // 2. Barcode match (if POS description contains a barcode-like string)
+  // Not applicable here — POS ItemPerformance has no barcode field
+
+  // 3. Fuzzy description match
+  let bestProduct: Product | null = null
+  let bestScore = 0
+  const posDesc = item.description
+  for (const p of products) {
+    // Compare against product name and smartRetailName
+    const nameScore = tokenSimilarity(posDesc, p.name)
+    const srScore = p.smartRetailName ? tokenSimilarity(posDesc, p.smartRetailName) : 0
+    const score = Math.max(nameScore, srScore)
+    if (score > bestScore) {
+      bestScore = score
+      bestProduct = p
+    }
+  }
+
+  if (bestScore >= FUZZY_THRESHOLD && bestProduct) {
+    return bestProduct
+  }
+
+  return null
 }
 
 // ── Build POS lookup map ─────────────────────────────────────────────────────
@@ -112,9 +165,10 @@ export async function syncPosData(days = 7): Promise<PosSyncResult> {
   let unmatched = 0
 
   for (const item of posItems) {
-    const product = products.find(p => posItemMatchesProduct(item.itemCode, p))
+    const product = findMatchingProduct(item, products)
     if (!product) {
       unmatched++
+      console.log(`[POS Sync] No match: ${item.itemCode} "${item.description}"`)
       continue
     }
     matched++
