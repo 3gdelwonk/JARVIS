@@ -9,7 +9,7 @@
  */
 
 import { useRef, useState, useEffect } from 'react'
-import { Download, Upload, X, RotateCcw, Wifi, RefreshCw, Cloud } from 'lucide-react'
+import { Download, Upload, X, RotateCcw, Wifi, RefreshCw, Cloud, Mail } from 'lucide-react'
 import {
   getSettings,
   saveSettings,
@@ -26,6 +26,14 @@ import {
 } from '../lib/lactalisRelay'
 import { checkPos } from '../lib/posRelay'
 import { fullSync, getSyncStatus, type SyncStatus } from '../lib/cloudSync'
+import {
+  prepareGmailClient,
+  connectGmail,
+  disconnectGmail,
+  syncGmailOrders,
+  isGmailConnected,
+  getGmailLastSync,
+} from '../lib/gmailSync'
 
 interface Props {
   onClose: () => void
@@ -48,8 +56,17 @@ export default function SettingsSheet({ onClose }: Props) {
   const [syncing, setSyncing] = useState(false)
   const [syncMsg, setSyncMsg] = useState<string | null>(null)
 
+  // Gmail sync state
+  const [gmailClientId, setGmailClientId] = useState(() => localStorage.getItem('milk-manager-gmail-client-id') || '')
+  const [gmailConnected, setGmailConnected] = useState(() => isGmailConnected())
+  const [gmailAutoSync, setGmailAutoSync] = useState(() => localStorage.getItem('milk-manager-gmail-auto-sync') === 'true')
+  const [gmailLastSync, setGmailLastSync] = useState(() => getGmailLastSync())
+  const [gmailStatus, setGmailStatus] = useState<string | null>(null)
+  const [gmailBusy, setGmailBusy] = useState(false)
+
   useEffect(() => {
     setSyncStatus(getSyncStatus())
+    prepareGmailClient()
   }, [])
 
   async function handleTestRelay() {
@@ -86,6 +103,59 @@ export default function SettingsSheet({ onClose }: Props) {
       setSyncMsg(`Sync failed: ${err.message}`)
     }
     setSyncing(false)
+  }
+
+  function handleGmailClientIdSave() {
+    const trimmed = gmailClientId.trim()
+    if (trimmed) {
+      localStorage.setItem('milk-manager-gmail-client-id', trimmed)
+      prepareGmailClient()
+    } else {
+      localStorage.removeItem('milk-manager-gmail-client-id')
+    }
+  }
+
+  async function handleGmailConnect() {
+    handleGmailClientIdSave()
+    setGmailStatus(null)
+    try {
+      const email = await connectGmail()
+      setGmailConnected(true)
+      setGmailStatus(`Connected as ${email}`)
+    } catch (err: any) {
+      setGmailStatus(`Failed: ${err.message}`)
+    }
+  }
+
+  function handleGmailDisconnect() {
+    disconnectGmail()
+    setGmailConnected(false)
+    setGmailAutoSync(false)
+    setGmailStatus('Disconnected')
+  }
+
+  function handleGmailAutoToggle() {
+    const next = !gmailAutoSync
+    setGmailAutoSync(next)
+    localStorage.setItem('milk-manager-gmail-auto-sync', String(next))
+  }
+
+  async function handleGmailSyncNow() {
+    handleGmailClientIdSave()
+    setGmailBusy(true)
+    setGmailStatus(null)
+    try {
+      const result = await syncGmailOrders()
+      setGmailLastSync(getGmailLastSync())
+      setGmailConnected(isGmailConnected())
+      const parts = [`${result.processed} emails scanned`]
+      if (result.count > 0) parts.push(`${result.count} orders imported`)
+      if (result.errors.length > 0) parts.push(`${result.errors.length} errors`)
+      setGmailStatus(parts.join(', '))
+    } catch (err: any) {
+      setGmailStatus(`Sync failed: ${err.message}`)
+    }
+    setGmailBusy(false)
   }
 
   async function handleBackup() {
@@ -346,6 +416,82 @@ export default function SettingsSheet({ onClose }: Props) {
               )}
               <p className="text-[11px] text-gray-400">
                 Device: {syncStatus.deviceId.slice(0, 8)}… · Syncs automatically every 5 min
+              </p>
+            </div>
+          </div>
+
+          {/* Gmail Order Sync */}
+          <div className="border-t border-gray-100 pt-4">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm font-medium text-gray-700">Gmail Order Sync</p>
+              {gmailConnected && (
+                <span className="text-[11px] text-green-600">Connected</span>
+              )}
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label htmlFor="gmail-client-id" className="text-[11px] text-gray-500 block mb-0.5">Google OAuth Client ID</label>
+                <input
+                  id="gmail-client-id"
+                  type="text"
+                  value={gmailClientId}
+                  onChange={(e) => setGmailClientId(e.target.value)}
+                  placeholder="123456789.apps.googleusercontent.com"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono"
+                />
+              </div>
+              <div className="flex gap-2">
+                {!gmailConnected ? (
+                  <button
+                    onClick={handleGmailConnect}
+                    disabled={!gmailClientId.trim()}
+                    className="flex items-center gap-1.5 px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 disabled:opacity-50"
+                  >
+                    <Mail size={14} />
+                    Connect Gmail
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      onClick={handleGmailSyncNow}
+                      disabled={gmailBusy}
+                      className="flex items-center gap-1.5 px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 disabled:opacity-50"
+                    >
+                      <RefreshCw size={14} className={gmailBusy ? 'animate-spin' : ''} />
+                      {gmailBusy ? 'Scanning…' : 'Sync Now'}
+                    </button>
+                    <button
+                      onClick={handleGmailDisconnect}
+                      className="px-3 py-2 border border-red-200 rounded-lg text-sm text-red-500"
+                    >
+                      Disconnect
+                    </button>
+                  </>
+                )}
+              </div>
+              {gmailConnected && (
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={gmailAutoSync}
+                    onChange={handleGmailAutoToggle}
+                    className="accent-blue-600"
+                  />
+                  <span className="text-[11px] text-gray-600">Auto-sync on app load</span>
+                </label>
+              )}
+              {gmailStatus && (
+                <p className={`text-[11px] ${gmailStatus.includes('Failed') || gmailStatus.includes('failed') ? 'text-red-500' : 'text-green-600'}`}>
+                  {gmailStatus}
+                </p>
+              )}
+              {gmailLastSync && (
+                <p className="text-[11px] text-gray-400">
+                  Last scan: {new Date(gmailLastSync).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                </p>
+              )}
+              <p className="text-[11px] text-gray-400">
+                Scans Lactalis order confirmation emails. Imported orders sync to other devices via Cloud Sync.
               </p>
             </div>
           </div>
