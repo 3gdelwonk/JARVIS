@@ -57,7 +57,20 @@ interface HealthResponse {
 
 export async function checkRelay(): Promise<HealthResponse> {
   try {
-    return await relayFetch<HealthResponse>('/api/lactalis/health')
+    const data = await relayFetch<any>('/api/lactalis/health')
+    // Handle JARVISmart format: { session: { valid, cookieCount, expiresIn } }
+    if (data.session) {
+      return {
+        connected: !!data.session.valid,
+        sessionCookies: data.session.cookieCount,
+        expiresIn: typeof data.session.expiresIn === 'number'
+          ? Math.round(data.session.expiresIn / 60) + ' min'
+          : data.session.expiresIn,
+        reason: data.session.valid ? undefined : 'Session invalid',
+      }
+    }
+    // Handle JARVIS format: { connected, sessionCookies, expiresIn }
+    return data as HealthResponse
   } catch (err: any) {
     return { connected: false, reason: err.message }
   }
