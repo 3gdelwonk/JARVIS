@@ -197,7 +197,10 @@ export interface SalesRecord {
   date: string;           // YYYY-MM-DD
   qtySold: number;
   salesValue: number;
+  cogs?: number;
   department?: string;
+  importBatchId?: string;
+  importedAt?: Date;
 }
 
 export interface StockPerformance {
