@@ -196,7 +196,7 @@ export function computePerformance(
   let dataSource: StockPerformance['dataSource'] = 'default'
   let lastSaleDate: string | undefined
 
-  if (salesDates.length >= 7) {
+  if (salesDates.length >= 1) {
     const periodDays = Math.max(
       1,
       daysBetween(salesDates[0]!, salesDates[salesDates.length - 1]!) + 1,

@@ -319,7 +319,6 @@ export default function StockPerformanceTab() {
             </div>
           ) : (
             sorted
-              .filter((r) => r.perf.abcClass !== 'D')
               .map((r) => (
                 <PerfRow
                   key={r.product.id}
