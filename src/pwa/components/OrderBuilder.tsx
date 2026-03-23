@@ -17,11 +17,8 @@ import {
   ChevronDown,
   ChevronUp,
   ImageOff,
-  Minus,
-  Plus,
   RefreshCw,
   RotateCcw,
-  Pencil,
   Search,
   ShoppingCart,
   Trash2,
@@ -102,21 +99,6 @@ interface RowProps {
 }
 
 const ForecastRow = memo(function ForecastRow({ forecast: f, qty, onChange, imageUrl }: RowProps) {
-  const [editing, setEditing] = useState(false)
-  const [inputVal, setInputVal] = useState('')
-  const inputRef = useRef<HTMLInputElement>(null)
-
-  function startEdit() {
-    setInputVal(String(qty))
-    setEditing(true)
-    setTimeout(() => inputRef.current?.select(), 0)
-  }
-
-  function commitEdit() {
-    onChange(f.productId, Math.max(0, parseInt(inputVal, 10) || 0))
-    setEditing(false)
-  }
-
   const stockLabel = f.currentStock !== null ? `${f.currentStock} in stock` : 'stock unknown'
   const stockoutLabel =
     f.daysUntilStockout !== null
@@ -167,37 +149,18 @@ const ForecastRow = memo(function ForecastRow({ forecast: f, qty, onChange, imag
           </div>
         </div>
 
-        <div className="flex items-center gap-1 shrink-0">
-          <button onPointerDown={(e) => e.preventDefault()}
-            onClick={() => onChange(f.productId, Math.max(0, qty - 1))}
-            className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-100 active:bg-gray-200 text-gray-600"
-            aria-label="Decrease">
-            <Minus size={14} />
-          </button>
-
-          {editing ? (
-            <input ref={inputRef} type="text" inputMode="numeric" pattern="[0-9]*" value={inputVal}
-              onChange={(e) => setInputVal(e.target.value.replace(/[^0-9]/g, ''))}
-              onBlur={commitEdit}
-              onKeyDown={(e) => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') { inputRef.current?.blur(); setEditing(false) } }}
-              className="w-12 text-center text-sm font-semibold border border-blue-400 rounded py-0.5 outline-none" />
-          ) : (
-            <button onClick={startEdit}
-              className={`w-12 text-center text-sm font-semibold py-0.5 rounded ${
-                qty === 0 ? 'text-gray-300' : qty > f.suggestedQty * 1.5 ? 'text-amber-600' : 'text-gray-900'
-              }`}
-              aria-label="Edit quantity">
-              {qty}
-            </button>
-          )}
-
-          <button onPointerDown={(e) => e.preventDefault()}
-            onClick={() => onChange(f.productId, qty + 1)}
-            className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-100 active:bg-gray-200 text-gray-600"
-            aria-label="Increase">
-            <Plus size={14} />
-          </button>
-        </div>
+        <input
+          type="text" inputMode="numeric" pattern="[0-9]*"
+          value={qty === 0 ? '' : String(qty)}
+          placeholder="0"
+          onChange={(e) => {
+            const val = e.target.value.replace(/[^0-9]/g, '')
+            onChange(f.productId, val === '' ? 0 : parseInt(val, 10))
+          }}
+          className={`w-12 text-center text-sm font-semibold border rounded py-1 outline-none shrink-0 ${
+            qty > 0 ? 'border-blue-400 bg-blue-50 text-gray-900' : 'border-gray-200 text-gray-400'
+          }`}
+        />
       </div>
     </div>
   )
@@ -211,10 +174,18 @@ interface HistoryViewProps {
 }
 
 function HistoryView({ onBuild, onViewOrder }: HistoryViewProps) {
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null)
+
   const orders = useLiveQuery(
     () => db.orders.orderBy('createdAt').reverse().toArray(),
     [],
   )
+
+  async function deleteOrder(orderId: number) {
+    await db.orderLines.where('orderId').equals(orderId).delete()
+    await db.orders.delete(orderId)
+    setConfirmDeleteId(null)
+  }
 
   return (
     <div className="flex flex-col h-full">
@@ -237,25 +208,48 @@ function HistoryView({ onBuild, onViewOrder }: HistoryViewProps) {
           </div>
         ) : (
           orders.map((order) => (
-            <button
-              key={order.id}
-              onClick={() => onViewOrder(order.id!)}
-              className="w-full text-left px-3 py-3 border-b border-gray-100 flex items-center justify-between gap-3 active:bg-gray-50"
-            >
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-gray-900">
-                  {new Date(order.createdAt).toLocaleDateString('en-AU', {
-                    weekday: 'short', day: 'numeric', month: 'short',
-                  })}
-                </p>
-                <p className="text-xs text-gray-500 mt-0.5">
-                  ${order.totalCostEstimate.toFixed(2)} est.
-                </p>
+            <div key={order.id} className="relative border-b border-gray-100">
+              {/* Delete confirmation overlay */}
+              {confirmDeleteId === order.id && (
+                <div className="absolute inset-0 flex items-center justify-end gap-2 px-3 bg-red-50/95 z-10">
+                  <span className="flex-1 text-xs text-red-700 font-medium">Delete this order?</span>
+                  <button onClick={() => setConfirmDeleteId(null)}
+                    className="px-3 py-1.5 text-xs font-medium text-gray-600 bg-white border border-gray-200 rounded-lg">
+                    Cancel
+                  </button>
+                  <button onClick={() => deleteOrder(order.id!)}
+                    className="px-3 py-1.5 text-xs font-semibold text-white bg-red-500 rounded-lg">
+                    Delete
+                  </button>
+                </div>
+              )}
+
+              <div className="flex items-center gap-3 px-3 py-3">
+                <button
+                  onClick={() => onViewOrder(order.id!)}
+                  className="flex-1 min-w-0 text-left active:bg-gray-50"
+                >
+                  <p className="text-sm font-medium text-gray-900">
+                    {new Date(order.createdAt).toLocaleDateString('en-AU', {
+                      weekday: 'short', day: 'numeric', month: 'short',
+                    })}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    ${order.totalCostEstimate.toFixed(2)} est.
+                  </p>
+                </button>
+                <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium shrink-0 ${STATUS_BADGE[order.status]}`}>
+                  {order.status}
+                </span>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(order.id!) }}
+                  className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-100 active:bg-red-100 text-gray-400 active:text-red-600 shrink-0"
+                  aria-label="Delete order"
+                >
+                  <Trash2 size={14} />
+                </button>
               </div>
-              <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${STATUS_BADGE[order.status]}`}>
-                {order.status}
-              </span>
-            </button>
+            </div>
           ))
         )}
       </div>
@@ -275,8 +269,6 @@ function OrderDetailView({ orderId, onBack }: OrderDetailProps) {
   const [relayStatus, setRelayStatus] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle')
   const [relayError, setRelayError] = useState<string | null>(null)
   const [relayHealth, setRelayHealth] = useState<{ connected: boolean; reason?: string } | null>(null)
-  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null)
-  const [editingLineId, setEditingLineId] = useState<number | null>(null)
 
   const order = useLiveQuery(() => db.orders.get(orderId), [orderId])
   const lines = useLiveQuery(
@@ -300,36 +292,11 @@ function OrderDetailView({ orderId, onBack }: OrderDetailProps) {
     )
   }
 
-  const isEditable = order.status === 'draft' || order.status === 'approved'
   const activeLines = lines.filter((l) => l.approvedQty > 0)
   const totalCost = Math.round(activeLines.reduce((s, l) => s + l.lineTotal, 0) * 100) / 100
   const dateStr = new Date(order.createdAt).toLocaleDateString('en-AU', {
     weekday: 'long', day: 'numeric', month: 'long',
   })
-
-  async function updateLineQty(lineId: number, newQty: number) {
-    if (newQty < 1) return
-    const line = lines?.find(l => l.id === lineId)
-    if (!line) return
-    const newLineTotal = Math.round(newQty * line.unitPrice * 100) / 100
-    await db.orderLines.update(lineId, { approvedQty: newQty, lineTotal: newLineTotal })
-    // Recalculate order total
-    const allLines = await db.orderLines.where('orderId').equals(orderId).toArray()
-    const newTotal = Math.round(allLines.filter(l => l.approvedQty > 0).reduce((s, l) => s + l.lineTotal, 0) * 100) / 100
-    await db.orders.update(orderId, { totalCostEstimate: newTotal })
-  }
-
-  async function deleteLine(lineId: number) {
-    await db.orderLines.delete(lineId)
-    const remaining = await db.orderLines.where('orderId').equals(orderId).toArray()
-    if (remaining.filter(l => l.approvedQty > 0).length === 0) {
-      await db.orders.update(orderId, { totalCostEstimate: 0, status: 'cancelled' })
-      onBack()
-      return
-    }
-    const newTotal = Math.round(remaining.filter(l => l.approvedQty > 0).reduce((s, l) => s + l.lineTotal, 0) * 100) / 100
-    await db.orders.update(orderId, { totalCostEstimate: newTotal })
-  }
 
   async function handleRelaySubmit() {
     setRelayStatus('submitting')
@@ -448,73 +415,21 @@ function OrderDetailView({ orderId, onBack }: OrderDetailProps) {
           {activeLines.length === 0 ? (
             <div className="py-8 text-center">
               <ShoppingCart size={28} className="mx-auto text-gray-200 mb-2" />
-              <p className="text-sm text-gray-400">All items removed</p>
+              <p className="text-sm text-gray-400">No items in this order</p>
               <button onClick={onBack} className="mt-2 text-sm text-blue-600">Back to Orders</button>
             </div>
           ) : (
             activeLines.map((line) => (
-              <div key={line.id} className="relative py-2 border-b border-gray-50 last:border-0">
-                {/* Delete confirmation overlay */}
-                {confirmDeleteId === line.id && (
-                  <div className="absolute inset-0 flex items-center justify-end gap-2 px-3 bg-red-50/95 rounded-lg z-10">
-                    <span className="flex-1 text-xs text-red-700 font-medium">Delete this item?</span>
-                    <button onClick={() => setConfirmDeleteId(null)}
-                      className="px-3 py-1.5 text-xs font-medium text-gray-600 bg-white border border-gray-200 rounded-lg">
-                      Cancel
-                    </button>
-                    <button onClick={() => { setConfirmDeleteId(null); deleteLine(line.id!) }}
-                      className="px-3 py-1.5 text-xs font-semibold text-white bg-red-500 rounded-lg">
-                      Delete
-                    </button>
-                  </div>
-                )}
-
-                <div className="flex items-center gap-2">
-                  <ProductThumb imageUrl={productImageMap?.get(line.productId)} />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm text-gray-800 truncate">{line.productName}</p>
-                    <p className="text-[11px] text-gray-400">#{line.itemNumber} · ${line.unitPrice.toFixed(2)}/unit</p>
-                  </div>
-
-                  {isEditable ? (
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      {/* Edit button — toggles qty stepper */}
-                      <button onClick={() => setEditingLineId(editingLineId === line.id ? null : line.id!)}
-                        className={`w-7 h-7 flex items-center justify-center rounded-full ${
-                          editingLineId === line.id ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-500'
-                        }`}>
-                        <Pencil size={12} />
-                      </button>
-                      {/* Delete button — shows confirmation */}
-                      <button onClick={() => setConfirmDeleteId(line.id!)}
-                        className="w-7 h-7 flex items-center justify-center rounded-full bg-gray-100 active:bg-red-100 text-gray-500 active:text-red-600">
-                        <Trash2 size={12} />
-                      </button>
-                      {/* Qty display */}
-                      <span className="w-8 text-center text-sm font-semibold">{line.approvedQty}</span>
-                    </div>
-                  ) : (
-                    <div className="text-right shrink-0 ml-2">
-                      <p className="text-sm font-semibold text-gray-900">x{line.approvedQty}</p>
-                      <p className="text-[11px] text-gray-500">${line.lineTotal.toFixed(2)}</p>
-                    </div>
-                  )}
+              <div key={line.id} className="flex items-center gap-2 py-2 border-b border-gray-50 last:border-0">
+                <ProductThumb imageUrl={productImageMap?.get(line.productId)} />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm text-gray-800 truncate">{line.productName}</p>
+                  <p className="text-[11px] text-gray-400">#{line.itemNumber} · ${line.unitPrice.toFixed(2)}/unit</p>
                 </div>
-
-                {/* Qty stepper — shown when edit is tapped */}
-                {isEditable && editingLineId === line.id && (
-                  <div className="flex items-center justify-end gap-1.5 mt-2 pr-1">
-                    <button onClick={() => updateLineQty(line.id!, line.approvedQty - 1)}
-                      className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-100 active:bg-gray-200 text-gray-600">
-                      <Minus size={14} />
-                    </button>
-                    <span className="w-10 text-center text-sm font-semibold">{line.approvedQty}</span>
-                    <button onClick={() => updateLineQty(line.id!, line.approvedQty + 1)}
-                      className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-100 active:bg-gray-200 text-gray-600">
-                      <Plus size={14} />
-                    </button>
-                  </div>
-                )}
+                <div className="text-right shrink-0 ml-2">
+                  <p className="text-sm font-semibold text-gray-900">x{line.approvedQty}</p>
+                  <p className="text-[11px] text-gray-500">${line.lineTotal.toFixed(2)}</p>
+                </div>
               </div>
             ))
           )}
