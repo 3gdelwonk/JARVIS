@@ -14,8 +14,10 @@ export interface Product {
   orderUnit: string;
   unitsPerOrder: number;
   minStockLevel: number;
+  maxStockLevel?: number;
   defaultOrderQty: number;
   targetDaysOfStock: number;
+  department?: string;
   lactalisCostPrice: number;
   metcashCostPrice?: number;
   sellPrice: number;
@@ -186,4 +188,27 @@ export interface GmailSyncRecord {
   subject: string;
   orderNumber?: string;
   parseError?: string;
+}
+
+export interface SalesRecord {
+  id?: number;
+  productId?: number;
+  barcode: string;
+  date: string;           // YYYY-MM-DD
+  qtySold: number;
+  salesValue: number;
+  department?: string;
+}
+
+export interface StockPerformance {
+  productId: number;
+  avgDailySales: number;
+  dataSource: 'pos_scan' | 'invoice' | 'default';
+  stockTurnRate: number;
+  gmroi: number;
+  daysOfStock: number;
+  velocityTrend: number;
+  shrinkage?: number;
+  abcClass: 'A' | 'B' | 'C' | 'D';
+  lastSaleDate?: string;
 }
