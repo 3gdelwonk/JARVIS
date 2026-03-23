@@ -182,7 +182,8 @@ export async function getDairyPerformance(days = 7): Promise<ItemPerformance[]> 
       getItemPerformance({ department: 'DAIRY', days, limit: 200 }),
     ])
     return [...milk.items, ...dairy.items]
-  } catch {
-    return [] // Graceful fallback — tunnel might be down
+  } catch (err) {
+    console.warn('[POS] getDairyPerformance failed:', (err as Error).message)
+    return []
   }
 }

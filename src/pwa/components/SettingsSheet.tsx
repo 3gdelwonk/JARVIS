@@ -63,7 +63,7 @@ export default function SettingsSheet({ onClose }: Props) {
       const [health, pos] = await Promise.all([checkRelay(), checkPos()])
       setRelayStatus(health.connected
         ? { ok: true, msg: health.cookieAge ? `Connected (cookies ${health.cookieAge} old)` : 'Connected' }
-        : { ok: false, msg: health.reason || 'Not connected' }
+        : { ok: false, msg: health.reason || (health.configured === false ? 'Credentials not configured on server' : 'Not connected') }
       )
       setPosStatus(pos.connected
         ? { ok: true, msg: 'Connected' }

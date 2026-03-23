@@ -115,6 +115,13 @@ export default function App() {
   })
   const [showSettings, setShowSettings] = useState(false)
   const [ready, setReady] = useState(false)
+  const [syncError, setSyncError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const onSyncError = (e: Event) => setSyncError((e as CustomEvent).detail)
+    window.addEventListener('sync-error', onSyncError)
+    return () => window.removeEventListener('sync-error', onSyncError)
+  }, [])
 
   useEffect(() => {
     // Await seed before rendering so Order Builder sees products on first load
@@ -189,6 +196,13 @@ export default function App() {
           </button>
         </div>
       </header>
+
+      {syncError && (
+        <div className="flex items-center justify-between px-4 py-1.5 bg-amber-50 border-b border-amber-200 shrink-0">
+          <p className="text-[11px] text-amber-700">Sync offline — {syncError}</p>
+          <button onClick={() => setSyncError(null)} className="text-amber-500 text-xs ml-2">✕</button>
+        </div>
+      )}
 
       <main className="flex-1 overflow-auto">
         {!ready ? (
