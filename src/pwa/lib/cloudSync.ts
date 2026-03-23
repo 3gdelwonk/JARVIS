@@ -95,11 +95,15 @@ async function syncFetch<T>(path: string, options?: RequestInit): Promise<T> {
 
 // ── Push ──
 
+const PUSH_BATCH_SIZE = 50
+
 export async function syncPush(): Promise<number> {
   const deviceId = getDeviceId()
   const lastPush = Number(localStorage.getItem(LAST_PUSH_KEY)) || 0
-  const payload: Record<string, any[]> = {}
   let totalPushed = 0
+
+  // Collect all changed records with their table names
+  const allChanged: { tableName: string; rec: any }[] = []
 
   for (const tableName of ALL_TABLES) {
     const table = db.table(tableName)
@@ -115,7 +119,6 @@ export async function syncPush(): Promise<number> {
           for (const [syncIdField, parentTable] of Object.entries(FK_MAP[tableName])) {
             const localIdField = FK_LOCAL_ID[syncIdField]
             if (localIdField && rec[localIdField] && !rec[syncIdField]) {
-              // Look up parent's syncId
               const parent = await db.table(parentTable).get(rec[localIdField])
               if (parent?.syncId) {
                 rec[syncIdField] = parent.syncId
@@ -124,17 +127,28 @@ export async function syncPush(): Promise<number> {
           }
         }
       }
-      payload[tableName] = changed
-      totalPushed += changed.length
+      for (const rec of changed) {
+        allChanged.push({ tableName, rec })
+      }
     }
   }
 
-  if (totalPushed === 0) return 0
+  if (allChanged.length === 0) return 0
 
-  await syncFetch('/push', {
-    method: 'POST',
-    body: JSON.stringify({ deviceId, tables: payload }),
-  })
+  // Send in batches to avoid 413
+  for (let i = 0; i < allChanged.length; i += PUSH_BATCH_SIZE) {
+    const batch = allChanged.slice(i, i + PUSH_BATCH_SIZE)
+    const payload: Record<string, any[]> = {}
+    for (const { tableName, rec } of batch) {
+      if (!payload[tableName]) payload[tableName] = []
+      payload[tableName].push(rec)
+    }
+    await syncFetch('/push', {
+      method: 'POST',
+      body: JSON.stringify({ deviceId, tables: payload }),
+    })
+    totalPushed += batch.length
+  }
 
   localStorage.setItem(LAST_PUSH_KEY, String(Date.now()))
   return totalPushed
