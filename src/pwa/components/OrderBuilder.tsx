@@ -15,6 +15,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  ImageOff,
   Minus,
   Plus,
   RefreshCw,
@@ -71,15 +72,108 @@ const CONF_COLOR: Record<Forecast['confidence'], string> = {
   low: 'text-gray-400',
 }
 
+// ─── Product image thumbnail ─────────────────────────────────────────────────
+
+function ProductThumb({ imageUrl, size = 8 }: { imageUrl?: string; size?: number }) {
+  return (
+    <div className={`relative w-${size} h-${size} rounded-md overflow-hidden bg-gray-100 shrink-0 flex items-center justify-center`}>
+      <ImageOff size={12} className="text-gray-300" />
+      {imageUrl && (
+        <img src={imageUrl} alt="" className="absolute inset-0 w-full h-full object-cover"
+          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+      )}
+    </div>
+  )
+}
+
+// ─── SwipeableRow ────────────────────────────────────────────────────────────
+
+const DELETE_WIDTH = 80
+
+function SwipeableRow({ children, onDelete, enabled }: {
+  children: React.ReactNode
+  onDelete: () => void
+  enabled: boolean
+}) {
+  const rowRef = useRef<HTMLDivElement>(null)
+  const startX = useRef(0)
+  const offsetX = useRef(0)
+  const dragging = useRef(false)
+
+  function handleTouchStart(e: React.TouchEvent) {
+    if (!enabled) return
+    startX.current = e.touches[0].clientX
+    offsetX.current = 0
+    dragging.current = false
+    if (rowRef.current) rowRef.current.style.transition = ''
+  }
+
+  function handleTouchMove(e: React.TouchEvent) {
+    if (!enabled) return
+    const dx = e.touches[0].clientX - startX.current
+    if (dx > 0) {
+      offsetX.current = 0
+    } else {
+      offsetX.current = Math.max(dx, -DELETE_WIDTH)
+      dragging.current = Math.abs(dx) > 10
+    }
+    if (rowRef.current) {
+      rowRef.current.style.transform = `translateX(${offsetX.current}px)`
+    }
+  }
+
+  function handleTouchEnd() {
+    if (!enabled || !rowRef.current) return
+    rowRef.current.style.transition = 'transform 0.2s ease'
+    if (Math.abs(offsetX.current) >= DELETE_WIDTH * 0.5) {
+      rowRef.current.style.transform = `translateX(-${DELETE_WIDTH}px)`
+    } else {
+      rowRef.current.style.transform = 'translateX(0)'
+    }
+  }
+
+  function handleDelete() {
+    if (rowRef.current) {
+      rowRef.current.style.transition = 'transform 0.3s ease, opacity 0.3s ease'
+      rowRef.current.style.transform = 'translateX(-100%)'
+      rowRef.current.style.opacity = '0'
+    }
+    setTimeout(onDelete, 300)
+  }
+
+  return (
+    <div className="relative overflow-hidden">
+      {/* Red delete behind */}
+      {enabled && (
+        <div className="absolute right-0 top-0 bottom-0 flex items-center justify-center bg-red-500" style={{ width: DELETE_WIDTH }}>
+          <button onClick={handleDelete} className="text-white text-xs font-semibold px-3 py-1">
+            Delete
+          </button>
+        </div>
+      )}
+      {/* Sliding content */}
+      <div ref={rowRef}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        className="relative bg-white"
+      >
+        {children}
+      </div>
+    </div>
+  )
+}
+
 // ─── ForecastRow ──────────────────────────────────────────────────────────────
 
 interface RowProps {
   forecast: Forecast
   qty: number
   onChange: (id: number, qty: number) => void
+  imageUrl?: string
 }
 
-const ForecastRow = memo(function ForecastRow({ forecast: f, qty, onChange }: RowProps) {
+const ForecastRow = memo(function ForecastRow({ forecast: f, qty, onChange, imageUrl }: RowProps) {
   const [editing, setEditing] = useState(false)
   const [inputVal, setInputVal] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -105,6 +199,7 @@ const ForecastRow = memo(function ForecastRow({ forecast: f, qty, onChange }: Ro
   return (
     <div className="px-3 py-2.5 border-b border-gray-100 last:border-0">
       <div className="flex items-start justify-between gap-2">
+        <ProductThumb imageUrl={imageUrl} />
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium text-gray-900 leading-snug truncate">{f.productName}</p>
           <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
@@ -258,6 +353,10 @@ function OrderDetailView({ orderId, onBack }: OrderDetailProps) {
     () => db.orderLines.where('orderId').equals(orderId).toArray(),
     [orderId],
   )
+  const productImageMap = useLiveQuery(
+    () => db.products.toArray().then((ps) => new Map(ps.map((p) => [p.id!, p.imageUrl ?? '']))),
+    [],
+  )
 
   useEffect(() => {
     checkRelay().then(setRelayHealth)
@@ -271,11 +370,36 @@ function OrderDetailView({ orderId, onBack }: OrderDetailProps) {
     )
   }
 
+  const isEditable = order.status === 'approved'
   const activeLines = lines.filter((l) => l.approvedQty > 0)
   const totalCost = Math.round(activeLines.reduce((s, l) => s + l.lineTotal, 0) * 100) / 100
   const dateStr = new Date(order.createdAt).toLocaleDateString('en-AU', {
     weekday: 'long', day: 'numeric', month: 'long',
   })
+
+  async function updateLineQty(lineId: number, newQty: number) {
+    if (newQty < 1) return
+    const line = lines?.find(l => l.id === lineId)
+    if (!line) return
+    const newLineTotal = Math.round(newQty * line.unitPrice * 100) / 100
+    await db.orderLines.update(lineId, { approvedQty: newQty, lineTotal: newLineTotal })
+    // Recalculate order total
+    const allLines = await db.orderLines.where('orderId').equals(orderId).toArray()
+    const newTotal = Math.round(allLines.filter(l => l.approvedQty > 0).reduce((s, l) => s + l.lineTotal, 0) * 100) / 100
+    await db.orders.update(orderId, { totalCostEstimate: newTotal })
+  }
+
+  async function deleteLine(lineId: number) {
+    await db.orderLines.delete(lineId)
+    const remaining = await db.orderLines.where('orderId').equals(orderId).toArray()
+    if (remaining.filter(l => l.approvedQty > 0).length === 0) {
+      await db.orders.update(orderId, { totalCostEstimate: 0, status: 'cancelled' })
+      onBack()
+      return
+    }
+    const newTotal = Math.round(remaining.filter(l => l.approvedQty > 0).reduce((s, l) => s + l.lineTotal, 0) * 100) / 100
+    await db.orders.update(orderId, { totalCostEstimate: newTotal })
+  }
 
   async function handleRelaySubmit() {
     setRelayStatus('submitting')
@@ -347,7 +471,7 @@ function OrderDetailView({ orderId, onBack }: OrderDetailProps) {
             <div>
               <button
                 onClick={handleRelaySubmit}
-                disabled={relayStatus === 'submitting' || relayStatus === 'success'}
+                disabled={relayStatus === 'submitting' || relayStatus === 'success' || activeLines.length === 0}
                 className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-semibold transition-colors ${
                   relayStatus === 'success'
                     ? 'bg-green-100 text-green-700'
@@ -385,21 +509,52 @@ function OrderDetailView({ orderId, onBack }: OrderDetailProps) {
 
         {/* Order lines */}
         <div className="px-3 py-3">
-          <p className="text-[11px] text-gray-400 font-medium uppercase tracking-wide mb-2">
-            Order Lines ({activeLines.length})
-          </p>
-          {activeLines.map((line) => (
-            <div key={line.id} className="flex items-center justify-between py-1.5 border-b border-gray-50 last:border-0">
-              <div className="flex-1 min-w-0">
-                <p className="text-sm text-gray-800 truncate">{line.productName}</p>
-                <p className="text-[11px] text-gray-400">#{line.itemNumber} · ${line.unitPrice.toFixed(2)}/unit</p>
-              </div>
-              <div className="text-right shrink-0 ml-3">
-                <p className="text-sm font-semibold text-gray-900">×{line.approvedQty}</p>
-                <p className="text-[11px] text-gray-500">${line.lineTotal.toFixed(2)}</p>
-              </div>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-[11px] text-gray-400 font-medium uppercase tracking-wide">
+              Order Lines ({activeLines.length})
+            </p>
+            {isEditable && (
+              <p className="text-[10px] text-gray-300">Swipe left to delete</p>
+            )}
+          </div>
+
+          {activeLines.length === 0 ? (
+            <div className="py-8 text-center">
+              <ShoppingCart size={28} className="mx-auto text-gray-200 mb-2" />
+              <p className="text-sm text-gray-400">All items removed</p>
+              <button onClick={onBack} className="mt-2 text-sm text-blue-600">Back to Orders</button>
             </div>
-          ))}
+          ) : (
+            activeLines.map((line) => (
+              <SwipeableRow key={line.id} onDelete={() => deleteLine(line.id!)} enabled={isEditable}>
+                <div className="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">
+                  <ProductThumb imageUrl={productImageMap?.get(line.productId)} />
+                  <div className="flex-1 min-w-0 ml-2">
+                    <p className="text-sm text-gray-800 truncate">{line.productName}</p>
+                    <p className="text-[11px] text-gray-400">#{line.itemNumber} · ${line.unitPrice.toFixed(2)}/unit</p>
+                  </div>
+                  {isEditable ? (
+                    <div className="flex items-center gap-1 shrink-0 ml-2">
+                      <button onClick={() => updateLineQty(line.id!, line.approvedQty - 1)}
+                        className="w-7 h-7 flex items-center justify-center rounded-full bg-gray-100 active:bg-gray-200 text-gray-600">
+                        <Minus size={12} />
+                      </button>
+                      <span className="w-8 text-center text-sm font-semibold">{line.approvedQty}</span>
+                      <button onClick={() => updateLineQty(line.id!, line.approvedQty + 1)}
+                        className="w-7 h-7 flex items-center justify-center rounded-full bg-gray-100 active:bg-gray-200 text-gray-600">
+                        <Plus size={12} />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="text-right shrink-0 ml-3">
+                      <p className="text-sm font-semibold text-gray-900">x{line.approvedQty}</p>
+                      <p className="text-[11px] text-gray-500">${line.lineTotal.toFixed(2)}</p>
+                    </div>
+                  )}
+                </div>
+              </SwipeableRow>
+            ))
+          )}
         </div>
 
         {/* Total */}
@@ -426,6 +581,11 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
   const [approving, setApproving] = useState(false)
   const [showOk, setShowOk] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const productImageMap = useLiveQuery(
+    () => db.products.toArray().then((ps) => new Map(ps.map((p) => [p.id!, p.imageUrl ?? '']))),
+    [],
+  )
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -592,14 +752,15 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
               </button>
 
               {(!isOk || showOk) && items.map((f) => (
-                <ForecastRow key={f.productId} forecast={f} qty={qtys.get(f.productId) ?? 0} onChange={setQty} />
+                <ForecastRow key={f.productId} forecast={f} qty={qtys.get(f.productId) ?? 0}
+                  onChange={setQty} imageUrl={productImageMap?.get(f.productId)} />
               ))}
             </div>
           )
         })}
       </div>
 
-      {/* Summary + Approve bar */}
+      {/* Summary + Done bar */}
       <div
         className="absolute left-1/2 -translate-x-1/2 w-full max-w-[480px] bg-white border-t border-gray-200 px-3 py-2.5 shadow-lg z-20"
         style={{ bottom: 'calc(49px + env(safe-area-inset-bottom, 0px))' }}
@@ -626,8 +787,8 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
           disabled={approving || totalItems === 0}
           className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white font-semibold py-2.5 rounded-xl disabled:opacity-40"
         >
-          <ShoppingCart size={16} />
-          {approving ? 'Saving…' : `Approve Order (${totalItems} items)`}
+          <CheckCircle2 size={16} />
+          {approving ? 'Saving…' : `Done (${totalItems} items)`}
         </button>
       </div>
     </div>
