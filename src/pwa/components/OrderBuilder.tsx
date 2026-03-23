@@ -89,114 +89,74 @@ function ProductThumb({ imageUrl, size = 8 }: { imageUrl?: string; size?: number
   )
 }
 
-// ─── SwipeableRow ────────────────────────────────────────────────────────────
+// ─── LongPressRow — hold to reveal delete ───────────────────────────────────
 
-const DELETE_WIDTH = 80
+const HOLD_MS = 400
 
-function SwipeableRow({ children, onDelete, enabled }: {
+function LongPressRow({ children, onDelete, enabled }: {
   children: React.ReactNode
   onDelete: () => void
   enabled: boolean
 }) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const rowRef = useRef<HTMLDivElement>(null)
-  const startX = useRef(0)
-  const startY = useRef(0)
-  const offsetX = useRef(0)
-  const swiping = useRef(false)
-  const decided = useRef(false)
-  const enabledRef = useRef(enabled)
-  enabledRef.current = enabled
+  const [showDelete, setShowDelete] = useState(false)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const movedRef = useRef(false)
 
-  // Attach touch listeners directly to the DOM with { passive: false }
-  // so that e.preventDefault() actually works on iOS Safari.
-  // React's onTouchMove is passive — preventDefault is silently ignored,
-  // and the browser starts scrolling before our JS can decide direction.
-  useEffect(() => {
-    const el = rowRef.current
-    if (!el) return
+  function clearTimer() {
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null }
+  }
 
-    function onTouchStart(e: TouchEvent) {
-      if (!enabledRef.current) return
-      startX.current = e.touches[0].clientX
-      startY.current = e.touches[0].clientY
-      offsetX.current = 0
-      swiping.current = false
-      decided.current = false
-      el!.style.transition = ''
-    }
+  function handleTouchStart() {
+    if (!enabled) return
+    movedRef.current = false
+    timerRef.current = setTimeout(() => {
+      if (!movedRef.current) setShowDelete(true)
+    }, HOLD_MS)
+  }
 
-    function onTouchMove(e: TouchEvent) {
-      if (!enabledRef.current) return
-      const dx = e.touches[0].clientX - startX.current
-      const dy = e.touches[0].clientY - startY.current
+  function handleTouchMove() {
+    movedRef.current = true
+    clearTimer()
+  }
 
-      // Decide direction once after 8px of movement
-      if (!decided.current && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) {
-        decided.current = true
-        swiping.current = Math.abs(dx) > Math.abs(dy)
-      }
+  function handleTouchEnd() {
+    clearTimer()
+  }
 
-      if (!swiping.current) return
+  function handleContextMenu(e: React.MouseEvent) {
+    if (!enabled) return
+    e.preventDefault()
+    setShowDelete(true)
+  }
 
-      // THIS is why we need { passive: false } — prevent scroll during swipe
-      e.preventDefault()
-      e.stopPropagation()
-
-      if (dx > 0) {
-        offsetX.current = 0
-      } else {
-        offsetX.current = Math.max(dx, -DELETE_WIDTH)
-      }
-      el!.style.transform = `translateX(${offsetX.current}px)`
-    }
-
-    function onTouchEnd() {
-      if (!enabledRef.current || !el) return
-      el.style.transition = 'transform 0.2s ease'
-      if (Math.abs(offsetX.current) >= DELETE_WIDTH * 0.5) {
-        el.style.transform = `translateX(-${DELETE_WIDTH}px)`
-      } else {
-        el.style.transform = 'translateX(0)'
-      }
-      swiping.current = false
-      decided.current = false
-    }
-
-    el.addEventListener('touchstart', onTouchStart, { passive: true })
-    el.addEventListener('touchmove', onTouchMove, { passive: false })
-    el.addEventListener('touchend', onTouchEnd, { passive: true })
-
-    return () => {
-      el.removeEventListener('touchstart', onTouchStart)
-      el.removeEventListener('touchmove', onTouchMove)
-      el.removeEventListener('touchend', onTouchEnd)
-    }
-  }, [])
-
-  function handleDelete() {
-    if (rowRef.current) {
-      rowRef.current.style.transition = 'transform 0.3s ease, opacity 0.3s ease'
-      rowRef.current.style.transform = 'translateX(-100%)'
-      rowRef.current.style.opacity = '0'
-    }
-    setTimeout(onDelete, 300)
+  function handleConfirmDelete() {
+    setShowDelete(false)
+    onDelete()
   }
 
   return (
-    <div ref={containerRef} className="relative overflow-hidden">
-      {/* Red delete behind */}
-      {enabled && (
-        <div className="absolute right-0 top-0 bottom-0 flex items-center justify-center bg-red-500" style={{ width: DELETE_WIDTH }}>
-          <button onClick={handleDelete} className="text-white text-xs font-semibold px-3 py-1">
+    <div className="relative"
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      onContextMenu={handleContextMenu}
+    >
+      {children}
+
+      {/* Delete overlay — shown on long press */}
+      {showDelete && (
+        <div className="absolute inset-0 flex items-center justify-end gap-2 px-3 bg-red-50/95 rounded-lg z-10">
+          <span className="flex-1 text-xs text-red-700 font-medium">Delete this item?</span>
+          <button onClick={() => setShowDelete(false)}
+            className="px-3 py-1.5 text-xs font-medium text-gray-600 bg-white border border-gray-200 rounded-lg">
+            Cancel
+          </button>
+          <button onClick={handleConfirmDelete}
+            className="px-3 py-1.5 text-xs font-semibold text-white bg-red-500 rounded-lg">
             Delete
           </button>
         </div>
       )}
-      {/* Sliding content */}
-      <div ref={rowRef} className="relative bg-white">
-        {children}
-      </div>
     </div>
   )
 }
@@ -551,7 +511,7 @@ function OrderDetailView({ orderId, onBack }: OrderDetailProps) {
               Order Lines ({activeLines.length})
             </p>
             {isEditable && (
-              <p className="text-[10px] text-gray-300">Swipe left to delete</p>
+              <p className="text-[10px] text-gray-300">Hold to delete</p>
             )}
           </div>
 
@@ -563,7 +523,7 @@ function OrderDetailView({ orderId, onBack }: OrderDetailProps) {
             </div>
           ) : (
             activeLines.map((line) => (
-              <SwipeableRow key={line.id} onDelete={() => deleteLine(line.id!)} enabled={isEditable}>
+              <LongPressRow key={line.id} onDelete={() => deleteLine(line.id!)} enabled={isEditable}>
                 <div className="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">
                   <ProductThumb imageUrl={productImageMap?.get(line.productId)} />
                   <div className="flex-1 min-w-0 ml-2">
@@ -589,7 +549,7 @@ function OrderDetailView({ orderId, onBack }: OrderDetailProps) {
                     </div>
                   )}
                 </div>
-              </SwipeableRow>
+              </LongPressRow>
             ))
           )}
         </div>
