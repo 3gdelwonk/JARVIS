@@ -1,5 +1,9 @@
 // All TypeScript interfaces from SPECS.md Section 1
 
+// ── Sync fields (added to all syncable tables) ──
+// syncId: UUID for cross-device identity
+// syncUpdatedAt: ms timestamp for incremental sync
+
 export interface Product {
   id?: number;
   barcode: string;
@@ -24,6 +28,8 @@ export interface Product {
   orderFrequency: "every" | "most" | "some" | "occasional";
   createdAt: Date;
   updatedAt: Date;
+  syncId?: string;
+  syncUpdatedAt?: number;
 }
 
 export interface StockSnapshot {
@@ -32,8 +38,11 @@ export interface StockSnapshot {
   barcode: string;
   qoh: number;
   importedAt: Date;
-  source: "item_maintenance" | "item_stock_report";
+  source: "item_maintenance" | "item_stock_report" | "pos_live";
   importBatchId: string;
+  syncId?: string;
+  syncUpdatedAt?: number;
+  productSyncId?: string;
 }
 
 export interface DeliverySlot {
@@ -45,6 +54,8 @@ export interface DeliverySlot {
   orderId?: number;
   scrapedAt?: Date;
   manualEntry: boolean;
+  syncId?: string;
+  syncUpdatedAt?: number;
 }
 
 export interface Order {
@@ -62,6 +73,8 @@ export interface Order {
   portalSource?: boolean;
   portalStatus?: string;
   portalRefNumber?: string;
+  syncId?: string;
+  syncUpdatedAt?: number;
 }
 
 export interface OrderLine {
@@ -76,6 +89,10 @@ export interface OrderLine {
   unitPrice: number;
   actualUnitPrice?: number;
   lineTotal: number;
+  syncId?: string;
+  syncUpdatedAt?: number;
+  orderSyncId?: string;
+  productSyncId?: string;
 }
 
 export interface InvoiceRecord {
@@ -87,6 +104,8 @@ export interface InvoiceRecord {
   totalAmount: number;
   parsedAt: Date;
   rawText?: string;
+  syncId?: string;
+  syncUpdatedAt?: number;
 }
 
 export interface InvoiceLine {
@@ -105,6 +124,9 @@ export interface InvoiceLine {
   gst?: number;
   extendedPrice: number;
   pricePerItem: number;
+  syncId?: string;
+  syncUpdatedAt?: number;
+  invoiceRecordSyncId?: string;
 }
 
 export interface PriceRecord {
@@ -114,6 +136,9 @@ export interface PriceRecord {
   effectiveDate: string;
   costPrice: number;
   source: "invoice" | "smart_retail" | "portal";
+  syncId?: string;
+  syncUpdatedAt?: number;
+  productSyncId?: string;
 }
 
 export interface ExpiryBatch {
@@ -125,6 +150,10 @@ export interface ExpiryBatch {
   expiryDate: string;     // YYYY-MM-DD
   receivedDate: string;   // YYYY-MM-DD
   status: "active" | "wasted";
+  syncId?: string;
+  syncUpdatedAt?: number;
+  productSyncId?: string;
+  orderSyncId?: string;
 }
 
 export interface WasteEntry {
@@ -136,6 +165,10 @@ export interface WasteEntry {
   wastedDate: string;     // YYYY-MM-DD
   reason: "expired" | "damaged" | "other";
   notes?: string;
+  syncId?: string;
+  syncUpdatedAt?: number;
+  productSyncId?: string;
+  expiryBatchSyncId?: string;
 }
 
 export interface ClaimRecord {
@@ -149,6 +182,10 @@ export interface ClaimRecord {
   description: string;
   emailSentAt?: string;   // YYYY-MM-DD
   createdAt: string;      // YYYY-MM-DD
+  syncId?: string;
+  syncUpdatedAt?: number;
+  productSyncId?: string;
+  orderSyncId?: string;
 }
 
 export interface PhotoRecord {
@@ -188,6 +225,8 @@ export interface GmailSyncRecord {
   subject: string;
   orderNumber?: string;
   parseError?: string;
+  syncId?: string;
+  syncUpdatedAt?: number;
 }
 
 export interface SalesRecord {
@@ -201,6 +240,9 @@ export interface SalesRecord {
   department?: string;
   importBatchId?: string;
   importedAt?: Date;
+  syncId?: string;
+  syncUpdatedAt?: number;
+  productSyncId?: string;
 }
 
 export interface StockPerformance {

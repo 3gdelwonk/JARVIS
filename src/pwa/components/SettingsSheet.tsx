@@ -8,8 +8,8 @@
  *  - Global order multiplier (0.5–2.0, step 0.05)
  */
 
-import { useRef, useState } from 'react'
-import { Download, Upload, X, RotateCcw, Wifi } from 'lucide-react'
+import { useRef, useState, useEffect } from 'react'
+import { Download, Upload, X, RotateCcw, Wifi, RefreshCw, Cloud } from 'lucide-react'
 import {
   getSettings,
   saveSettings,
@@ -24,6 +24,8 @@ import {
   setApiKey,
   checkRelay,
 } from '../lib/lactalisRelay'
+import { checkPos } from '../lib/posRelay'
+import { fullSync, getSyncStatus, type SyncStatus } from '../lib/cloudSync'
 
 interface Props {
   onClose: () => void
@@ -38,24 +40,52 @@ export default function SettingsSheet({ onClose }: Props) {
   const [relayUrl, setRelayUrlState] = useState(() => getRelayUrl())
   const [apiKey, setApiKeyState] = useState(() => getApiKey())
   const [relayStatus, setRelayStatus] = useState<{ ok: boolean; msg: string } | null>(null)
+  const [posStatus, setPosStatus] = useState<{ ok: boolean; msg: string } | null>(null)
   const [relayChecking, setRelayChecking] = useState(false)
+
+  // Cloud sync state
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>(() => getSyncStatus())
+  const [syncing, setSyncing] = useState(false)
+  const [syncMsg, setSyncMsg] = useState<string | null>(null)
+
+  useEffect(() => {
+    setSyncStatus(getSyncStatus())
+  }, [])
 
   async function handleTestRelay() {
     setRelayChecking(true)
     setRelayStatus(null)
+    setPosStatus(null)
     // Save current values before testing
     setRelayUrl(relayUrl)
     setApiKey(apiKey)
     try {
-      const health = await checkRelay()
+      const [health, pos] = await Promise.all([checkRelay(), checkPos()])
       setRelayStatus(health.connected
-        ? { ok: true, msg: `Connected (${health.sessionCookies} cookies, expires ${health.expiresIn})` }
+        ? { ok: true, msg: health.cookieAge ? `Connected (cookies ${health.cookieAge} old)` : 'Connected' }
         : { ok: false, msg: health.reason || 'Not connected' }
+      )
+      setPosStatus(pos.connected
+        ? { ok: true, msg: 'Connected' }
+        : { ok: false, msg: pos.reason || 'Not connected' }
       )
     } catch (err: any) {
       setRelayStatus({ ok: false, msg: err.message })
     }
     setRelayChecking(false)
+  }
+
+  async function handleSyncNow() {
+    setSyncing(true)
+    setSyncMsg(null)
+    try {
+      await fullSync()
+      setSyncStatus(getSyncStatus())
+      setSyncMsg('Sync complete')
+    } catch (err: any) {
+      setSyncMsg(`Sync failed: ${err.message}`)
+    }
+    setSyncing(false)
   }
 
   async function handleBackup() {
@@ -274,13 +304,48 @@ export default function SettingsSheet({ onClose }: Props) {
                 <Wifi size={14} />
                 {relayChecking ? 'Testing…' : 'Test Connection'}
               </button>
+              {posStatus && (
+                <p className={`text-[11px] ${posStatus.ok ? 'text-green-600' : 'text-red-500'}`}>
+                  {posStatus.ok ? '✓' : '✗'} POS Data: {posStatus.msg}
+                </p>
+              )}
               {relayStatus && (
                 <p className={`text-[11px] ${relayStatus.ok ? 'text-green-600' : 'text-red-500'}`}>
-                  {relayStatus.ok ? '✓' : '✗'} {relayStatus.msg}
+                  {relayStatus.ok ? '✓' : '✗'} Lactalis Relay: {relayStatus.msg}
                 </p>
               )}
               <p className="text-[11px] text-gray-400">
                 Enter your Cloudflare Tunnel URL for remote access, or LAN IP for in-store use.
+              </p>
+            </div>
+          </div>
+
+          {/* Cloud Sync */}
+          <div className="border-t border-gray-100 pt-4">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm font-medium text-gray-700">Cloud Sync</p>
+              {syncStatus.lastPull && (
+                <span className="text-[11px] text-gray-400">
+                  Last: {new Date(syncStatus.lastPull).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                </span>
+              )}
+            </div>
+            <div className="space-y-2">
+              <button
+                onClick={handleSyncNow}
+                disabled={syncing}
+                className="flex items-center gap-1.5 px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 disabled:opacity-50"
+              >
+                {syncing ? <RefreshCw size={14} className="animate-spin" /> : <Cloud size={14} />}
+                {syncing ? 'Syncing…' : 'Sync Now'}
+              </button>
+              {syncMsg && (
+                <p className={`text-[11px] ${syncMsg.includes('failed') ? 'text-red-500' : 'text-green-600'}`}>
+                  {syncMsg}
+                </p>
+              )}
+              <p className="text-[11px] text-gray-400">
+                Device: {syncStatus.deviceId.slice(0, 8)}… · Syncs automatically every 5 min
               </p>
             </div>
           </div>

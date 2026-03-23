@@ -132,3 +132,57 @@ export async function searchItems(query: string, limit: number = 20): Promise<Se
     limit: String(limit),
   })
 }
+
+// ── Item Performance (combined QOH + sales + pricing) ──
+
+export interface ItemPerformance {
+  itemCode: string
+  description: string
+  department: string
+  revenue: number
+  cost: number
+  grossProfit: number
+  gpPercent: number
+  qtySold: number
+  avgDailyVelocity: number
+  qoh: number
+  sellPrice: number
+  avgCost: number
+  daysOfStock: number
+  supplierCtnCost: number
+  ctnQty: number
+  grade: string
+}
+
+interface ItemPerformanceResponse {
+  items: ItemPerformance[]
+  count: number
+  sort: string
+  period: string
+}
+
+export async function getItemPerformance(opts: {
+  department: string
+  days?: number
+  limit?: number
+}): Promise<ItemPerformanceResponse> {
+  return posFetch<ItemPerformanceResponse>('/item-performance', {
+    department: opts.department,
+    days: String(opts.days ?? 7),
+    limit: String(opts.limit ?? 200),
+    sort: 'revenue',
+  })
+}
+
+/** Fetch MILK + DAIRY departments in parallel, return combined array */
+export async function getDairyPerformance(days = 7): Promise<ItemPerformance[]> {
+  try {
+    const [milk, dairy] = await Promise.all([
+      getItemPerformance({ department: 'MILK', days, limit: 200 }),
+      getItemPerformance({ department: 'DAIRY', days, limit: 200 }),
+    ])
+    return [...milk.items, ...dairy.items]
+  } catch {
+    return [] // Graceful fallback — tunnel might be down
+  }
+}
