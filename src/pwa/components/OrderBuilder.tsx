@@ -21,8 +21,10 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Pencil,
   Search,
   ShoppingCart,
+  Trash2,
   X,
 } from 'lucide-react'
 import { generateForecasts, getSettings, type Forecast } from '../lib/forecastEngine'
@@ -89,84 +91,6 @@ function ProductThumb({ imageUrl, size = 8 }: { imageUrl?: string; size?: number
   )
 }
 
-// ─── LongPressRow — hold to reveal delete ───────────────────────────────────
-
-const HOLD_MS = 400
-
-function LongPressRow({ children, onDelete, enabled }: {
-  children: React.ReactNode
-  onDelete: () => void
-  enabled: boolean
-}) {
-  const [showDelete, setShowDelete] = useState(false)
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const startPos = useRef({ x: 0, y: 0 })
-
-  function clearTimer() {
-    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null }
-  }
-
-  function handleTouchStart(e: React.TouchEvent) {
-    if (!enabled) return
-    startPos.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }
-    clearTimer()
-    timerRef.current = setTimeout(() => {
-      setShowDelete(true)
-    }, HOLD_MS)
-  }
-
-  function handleTouchMove(e: React.TouchEvent) {
-    if (!timerRef.current) return
-    // Only cancel if finger moved more than 10px (ignore jitter)
-    const dx = e.touches[0].clientX - startPos.current.x
-    const dy = e.touches[0].clientY - startPos.current.y
-    if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
-      clearTimer()
-    }
-  }
-
-  function handleTouchEnd() {
-    clearTimer()
-  }
-
-  function handleContextMenu(e: React.MouseEvent) {
-    if (!enabled) return
-    e.preventDefault()
-    setShowDelete(true)
-  }
-
-  function handleConfirmDelete() {
-    setShowDelete(false)
-    onDelete()
-  }
-
-  return (
-    <div className="relative"
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
-      onContextMenu={handleContextMenu}
-    >
-      {children}
-
-      {/* Delete overlay — shown on long press */}
-      {showDelete && (
-        <div className="absolute inset-0 flex items-center justify-end gap-2 px-3 bg-red-50/95 rounded-lg z-10"
-          style={{ WebkitUserSelect: 'none', userSelect: 'none' }}>
-          <span className="flex-1 text-xs text-red-700 font-medium">Delete this item?</span>
-          <button onClick={() => setShowDelete(false)}
-            className="px-3 py-1.5 text-xs font-medium text-gray-600 bg-white border border-gray-200 rounded-lg">
-            Cancel
-          </button>
-          <button onClick={handleConfirmDelete}
-            className="px-3 py-1.5 text-xs font-semibold text-white bg-red-500 rounded-lg">
-            Delete
-          </button>
-        </div>
-      )}
-    </div>
-  )
-}
 
 // ─── ForecastRow ──────────────────────────────────────────────────────────────
 
@@ -351,6 +275,8 @@ function OrderDetailView({ orderId, onBack }: OrderDetailProps) {
   const [relayStatus, setRelayStatus] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle')
   const [relayError, setRelayError] = useState<string | null>(null)
   const [relayHealth, setRelayHealth] = useState<{ connected: boolean; reason?: string } | null>(null)
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null)
+  const [editingLineId, setEditingLineId] = useState<number | null>(null)
 
   const order = useLiveQuery(() => db.orders.get(orderId), [orderId])
   const lines = useLiveQuery(
@@ -517,9 +443,6 @@ function OrderDetailView({ orderId, onBack }: OrderDetailProps) {
             <p className="text-[11px] text-gray-400 font-medium uppercase tracking-wide">
               Order Lines ({activeLines.length})
             </p>
-            {isEditable && (
-              <p className="text-[10px] text-gray-300">Hold to delete</p>
-            )}
           </div>
 
           {activeLines.length === 0 ? (
@@ -530,33 +453,69 @@ function OrderDetailView({ orderId, onBack }: OrderDetailProps) {
             </div>
           ) : (
             activeLines.map((line) => (
-              <LongPressRow key={line.id} onDelete={() => deleteLine(line.id!)} enabled={isEditable}>
-                <div className="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">
+              <div key={line.id} className="relative py-2 border-b border-gray-50 last:border-0">
+                {/* Delete confirmation overlay */}
+                {confirmDeleteId === line.id && (
+                  <div className="absolute inset-0 flex items-center justify-end gap-2 px-3 bg-red-50/95 rounded-lg z-10">
+                    <span className="flex-1 text-xs text-red-700 font-medium">Delete this item?</span>
+                    <button onClick={() => setConfirmDeleteId(null)}
+                      className="px-3 py-1.5 text-xs font-medium text-gray-600 bg-white border border-gray-200 rounded-lg">
+                      Cancel
+                    </button>
+                    <button onClick={() => { setConfirmDeleteId(null); deleteLine(line.id!) }}
+                      className="px-3 py-1.5 text-xs font-semibold text-white bg-red-500 rounded-lg">
+                      Delete
+                    </button>
+                  </div>
+                )}
+
+                <div className="flex items-center gap-2">
                   <ProductThumb imageUrl={productImageMap?.get(line.productId)} />
-                  <div className="flex-1 min-w-0 ml-2">
+                  <div className="flex-1 min-w-0">
                     <p className="text-sm text-gray-800 truncate">{line.productName}</p>
                     <p className="text-[11px] text-gray-400">#{line.itemNumber} · ${line.unitPrice.toFixed(2)}/unit</p>
                   </div>
+
                   {isEditable ? (
-                    <div className="flex items-center gap-1 shrink-0 ml-2">
-                      <button onClick={() => updateLineQty(line.id!, line.approvedQty - 1)}
-                        className="w-7 h-7 flex items-center justify-center rounded-full bg-gray-100 active:bg-gray-200 text-gray-600">
-                        <Minus size={12} />
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {/* Edit button — toggles qty stepper */}
+                      <button onClick={() => setEditingLineId(editingLineId === line.id ? null : line.id!)}
+                        className={`w-7 h-7 flex items-center justify-center rounded-full ${
+                          editingLineId === line.id ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-500'
+                        }`}>
+                        <Pencil size={12} />
                       </button>
+                      {/* Delete button — shows confirmation */}
+                      <button onClick={() => setConfirmDeleteId(line.id!)}
+                        className="w-7 h-7 flex items-center justify-center rounded-full bg-gray-100 active:bg-red-100 text-gray-500 active:text-red-600">
+                        <Trash2 size={12} />
+                      </button>
+                      {/* Qty display */}
                       <span className="w-8 text-center text-sm font-semibold">{line.approvedQty}</span>
-                      <button onClick={() => updateLineQty(line.id!, line.approvedQty + 1)}
-                        className="w-7 h-7 flex items-center justify-center rounded-full bg-gray-100 active:bg-gray-200 text-gray-600">
-                        <Plus size={12} />
-                      </button>
                     </div>
                   ) : (
-                    <div className="text-right shrink-0 ml-3">
+                    <div className="text-right shrink-0 ml-2">
                       <p className="text-sm font-semibold text-gray-900">x{line.approvedQty}</p>
                       <p className="text-[11px] text-gray-500">${line.lineTotal.toFixed(2)}</p>
                     </div>
                   )}
                 </div>
-              </LongPressRow>
+
+                {/* Qty stepper — shown when edit is tapped */}
+                {isEditable && editingLineId === line.id && (
+                  <div className="flex items-center justify-end gap-1.5 mt-2 pr-1">
+                    <button onClick={() => updateLineQty(line.id!, line.approvedQty - 1)}
+                      className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-100 active:bg-gray-200 text-gray-600">
+                      <Minus size={14} />
+                    </button>
+                    <span className="w-10 text-center text-sm font-semibold">{line.approvedQty}</span>
+                    <button onClick={() => updateLineQty(line.id!, line.approvedQty + 1)}
+                      className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-100 active:bg-gray-200 text-gray-600">
+                      <Plus size={14} />
+                    </button>
+                  </div>
+                )}
+              </div>
             ))
           )}
         </div>
