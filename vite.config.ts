@@ -25,7 +25,7 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'prompt',
+      registerType: 'autoUpdate',
       manifest: {
         name: 'IGA Milk Manager',
         short_name: 'Milk Manager',
