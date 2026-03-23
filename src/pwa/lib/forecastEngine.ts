@@ -17,6 +17,7 @@
 import { db } from './db'
 import { parseLocalDate } from './constants'
 import type { InvoiceLine, Product, SalesRecord } from './types'
+import { getDairyPerformance, type ItemPerformance } from './posRelay'
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
 
@@ -260,11 +261,22 @@ function forecastProduct(
   }
 }
 
+// ─── POS item matching ────────────────────────────────────────────────────────
+
+function posItemMatchesProduct(itemCode: string, product: Product): boolean {
+  if (product.itemNumber === itemCode) return true
+  // POS uses STR000XXXXX format, PWA products use just the digits
+  return itemCode.replace(/^STR0*/, '') === product.itemNumber
+}
+
 // ─── Main entry point ─────────────────────────────────────────────────────────
 
 export async function generateForecasts(
   settings: ForecastSettings = getSettings(),
-): Promise<Forecast[]> {
+): Promise<{ forecasts: Forecast[]; posMap: Map<string, ItemPerformance> }> {
+  // Fetch live POS data in parallel with DB queries (non-blocking)
+  const posPromise = getDairyPerformance(7)
+
   const [allProducts, allLines, allRecords, allSnapshots, allBatches, allWaste, allSales] = await Promise.all([
     db.products.toArray(),
     db.invoiceLines.toArray(),
@@ -276,6 +288,38 @@ export async function generateForecasts(
   ])
 
   const products = allProducts.filter((p) => p.active)
+
+  // ── Build POS lookup and persist live snapshots ──
+  const posItems = await posPromise
+  const posMap = new Map<string, ItemPerformance>()
+  for (const item of posItems) {
+    // Key by stripped code for easy lookup
+    const stripped = item.itemCode.replace(/^STR0*/, '')
+    posMap.set(stripped, item)
+    posMap.set(item.itemCode, item)
+  }
+
+  // Persist live QOH to stockSnapshots for offline fallback
+  if (posItems.length > 0) {
+    const batchId = `pos_live_${Date.now()}`
+    const snapshots = posItems
+      .map(item => {
+        const product = products.find(p => posItemMatchesProduct(item.itemCode, p))
+        if (!product) return null
+        return {
+          productId: product.id!,
+          barcode: product.barcode,
+          qoh: item.qoh,
+          importedAt: new Date(),
+          source: 'pos_live' as const,
+          importBatchId: batchId,
+        }
+      })
+      .filter((s): s is NonNullable<typeof s> => s !== null)
+    if (snapshots.length > 0) {
+      await db.stockSnapshots.bulkAdd(snapshots).catch(() => {})
+    }
+  }
 
   // Index invoice-type record IDs
   const invoiceIds = new Set(
@@ -332,7 +376,7 @@ export async function generateForecasts(
     salesByBarcode.set(s.barcode, arr2)
   }
 
-  return products.map((p) => {
+  const forecasts = products.map((p) => {
     const received = receivedByProduct.get(p.id!) ?? 0
     const wasted   = wastedByProduct.get(p.id!) ?? 0
     const wasteRate = received > 0 ? Math.round((wasted / received) * 1000) / 1000 : null
@@ -343,13 +387,22 @@ export async function generateForecasts(
       (p.barcode ? salesByBarcode.get(p.barcode) : undefined) ??
       []
 
+    // Override currentStock with live POS QOH if available
+    let currentStock = latestQoh.has(p.id!) ? (latestQoh.get(p.id!) ?? null) : null
+    const livePosItem = posMap.get(p.itemNumber) || posMap.get(`STR000${p.itemNumber.padStart(5, '0')}`)
+    if (livePosItem !== undefined) {
+      currentStock = livePosItem.qoh
+    }
+
     return forecastProduct(
       p,
       linesByCode.get(p.invoiceCode) ?? [],
-      latestQoh.has(p.id!) ? (latestQoh.get(p.id!) ?? null) : null,
+      currentStock,
       settings,
       wasteRate,
       posRecords,
     )
   })
+
+  return { forecasts, posMap }
 }

@@ -73,10 +73,61 @@ export class MilkManagerDB extends Dexie {
     this.version(7).stores({
       salesRecords: '++id, productId, barcode, date, department',
     })
+    // v8 — Cloud sync: add syncId + syncUpdatedAt to all syncable tables
+    this.version(8).stores({
+      products:        '++id, barcode, &invoiceCode, itemNumber, category, active, syncId, syncUpdatedAt',
+      stockSnapshots:  '++id, [productId+importedAt], importBatchId, syncId, syncUpdatedAt',
+      deliverySlots:   '++id, deliveryDate, status, [orderCutoffDate+orderCutoffTime], syncId, syncUpdatedAt',
+      orders:          '++id, status, deliveryDate, createdAt, syncId, syncUpdatedAt',
+      orderLines:      '++id, orderId, productId, syncId, syncUpdatedAt',
+      invoiceRecords:  '++id, &documentNumber, invoiceDate, syncId, syncUpdatedAt',
+      invoiceLines:    '++id, invoiceRecordId, productCode, deliveryDate, syncId, syncUpdatedAt',
+      priceHistory:    '++id, [productId+effectiveDate], invoiceCode, syncId, syncUpdatedAt',
+      expiryBatches:   '++id, productId, expiryDate, status, receivedDate, syncId, syncUpdatedAt',
+      wasteLog:        '++id, productId, wastedDate, expiryBatchId, syncId, syncUpdatedAt',
+      claimRecords:    '++id, productId, claimType, createdAt, orderId, syncId, syncUpdatedAt',
+      gmailSyncLog:    '++id, &messageId, syncedAt, parsed, syncId, syncUpdatedAt',
+      salesRecords:    '++id, productId, barcode, date, department, syncId, syncUpdatedAt',
+    }).upgrade(tx => {
+      const now = Date.now()
+      const tables = [
+        'products', 'stockSnapshots', 'deliverySlots', 'orders', 'orderLines',
+        'invoiceRecords', 'invoiceLines', 'priceHistory', 'expiryBatches',
+        'wasteLog', 'claimRecords', 'gmailSyncLog', 'salesRecords',
+      ] as const
+      return Promise.all(tables.map(name =>
+        tx.table(name).toCollection().modify((rec: any) => {
+          if (!rec.syncId) rec.syncId = crypto.randomUUID()
+          if (!rec.syncUpdatedAt) rec.syncUpdatedAt = now
+        })
+      ))
+    })
   }
 }
 
+// ── Sync hooks: auto-stamp syncId + syncUpdatedAt on all mutations ──
+
+const SYNC_TABLES = [
+  'products', 'stockSnapshots', 'deliverySlots', 'orders', 'orderLines',
+  'invoiceRecords', 'invoiceLines', 'priceHistory', 'expiryBatches',
+  'wasteLog', 'claimRecords', 'gmailSyncLog', 'salesRecords',
+] as const
+
 export const db = new MilkManagerDB()
+
+// Install creating/updating hooks for sync fields
+for (const tableName of SYNC_TABLES) {
+  const table = db.table(tableName)
+  table.hook('creating', function (_primKey, obj) {
+    if (!obj.syncId) obj.syncId = crypto.randomUUID()
+    obj.syncUpdatedAt = Date.now()
+  })
+  table.hook('updating', function (modifications: any) {
+    // Don't re-stamp if this is a sync-pull update (syncUpdatedAt already set by remote)
+    if (modifications.syncUpdatedAt !== undefined) return modifications
+    return { ...modifications, syncUpdatedAt: Date.now() }
+  })
+}
 
 export async function clearAllData(): Promise<void> {
   await db.transaction('rw', [

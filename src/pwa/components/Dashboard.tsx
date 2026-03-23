@@ -184,7 +184,7 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
       setLoadingForecasts(true)
       setForecastError(null)
       generateForecasts(getSettings())
-        .then((forecasts) => {
+        .then(({ forecasts }) => {
           if (cancelled) return
           const urgent = forecasts
             .filter((f) => f.suggestedQty > 0)

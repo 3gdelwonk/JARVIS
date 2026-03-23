@@ -5,6 +5,7 @@ import { BarChart2, Camera, Compass, LayoutDashboard, ShoppingCart, Package, Set
 import { seedDatabase, backfillBakedImages } from './pwa/lib/db'
 import { applyStatusUpdates, applyExtensionSchedule, fetchCloudSchedule } from './pwa/lib/extensionSync'
 import { syncGmailOrders, isGmailConnected } from './pwa/lib/gmailSync'
+import { fullSync, startPeriodicSync } from './pwa/lib/cloudSync'
 import Dashboard from './pwa/components/Dashboard'
 import OrderBuilder from './pwa/components/OrderBuilder'
 import MarginAnalysis from './pwa/components/MarginAnalysis'
@@ -126,6 +127,8 @@ export default function App() {
       ])
       setReady(true)
       // Non-blocking post-render syncs
+      fullSync().catch(console.warn)
+      startPeriodicSync()
       fetchCloudSchedule().catch(console.error)
       if (localStorage.getItem('milk-manager-gmail-auto-sync') === 'true' && isGmailConnected()) {
         syncGmailOrders().catch(console.warn)

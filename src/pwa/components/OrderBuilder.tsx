@@ -29,6 +29,7 @@ import { db } from '../lib/db'
 import { AVG_DELIVERY_COST, nextDeliveryDate, friendlyError } from '../lib/constants'
 import type { Order } from '../lib/types'
 import { submitOrder as relaySubmitOrder, checkRelay } from '../lib/lactalisRelay'
+import type { ItemPerformance } from '../lib/posRelay'
 
 const STATUS_BADGE: Record<Order['status'], string> = {
   draft:      'bg-gray-100 text-gray-600',
@@ -96,10 +97,14 @@ interface RowProps {
   qty: number
   onChange: (id: number, qty: number) => void
   imageUrl?: string
+  posData?: ItemPerformance | null
 }
 
-const ForecastRow = memo(function ForecastRow({ forecast: f, qty, onChange, imageUrl }: RowProps) {
-  const stockLabel = f.currentStock !== null ? `${f.currentStock} in stock` : 'stock unknown'
+const ForecastRow = memo(function ForecastRow({ forecast: f, qty, onChange, imageUrl, posData }: RowProps) {
+  const isLive = posData !== undefined && posData !== null
+  const stockLabel = f.currentStock !== null
+    ? `${f.currentStock} in stock`
+    : 'stock unknown'
   const stockoutLabel =
     f.daysUntilStockout !== null
       ? f.daysUntilStockout <= 0 ? 'Stocked out' : `${f.daysUntilStockout}d left`
@@ -121,6 +126,7 @@ const ForecastRow = memo(function ForecastRow({ forecast: f, qty, onChange, imag
               </>
             )}
             <span className="text-[11px] text-gray-400">·</span>
+            {isLive && <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500 mr-0.5" title="Live POS" />}
             <span className="text-[11px] text-gray-500">{stockLabel}</span>
             {stockoutLabel && (
               <>
@@ -146,6 +152,15 @@ const ForecastRow = memo(function ForecastRow({ forecast: f, qty, onChange, imag
               title={`${f.dataPoints} data points`}>
               {f.confidence}
             </span>
+            {posData && (
+              <>
+                <span className="text-[11px] text-gray-400">·</span>
+                <span className={`text-[11px] font-medium ${
+                  posData.gpPercent < 15 ? 'text-red-500' :
+                  posData.gpPercent < 25 ? 'text-amber-500' : 'text-green-600'
+                }`}>{posData.gpPercent.toFixed(1)}% GP</span>
+              </>
+            )}
           </div>
         </div>
 
@@ -577,6 +592,7 @@ function useBarcodeCamera(onDetected: (barcode: string) => void) {
 
 function BuildView({ onApproved, onCancel }: BuildViewProps) {
   const [forecasts, setForecasts] = useState<Forecast[]>([])
+  const [posMap, setPosMap] = useState<Map<string, ItemPerformance>>(new Map())
   const [qtys, setQtys] = useState<Map<number, number>>(new Map())
   const [loading, setLoading] = useState(true)
   const [approving, setApproving] = useState(false)
@@ -663,10 +679,11 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
       setLoading(false)
     }, 30000)
     try {
-      const results = await generateForecasts(getSettings())
+      const { forecasts: results, posMap: pm } = await generateForecasts(getSettings())
       clearTimeout(timer)
       if (timedOut) return
       setForecasts(results)
+      setPosMap(pm)
       setQtys((prev) => {
         const next = new Map(prev)
         for (const f of results) {
@@ -871,7 +888,8 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
                   <div key={f.productId} ref={(el) => { if (el) rowRefs.current.set(f.productId, el) }}
                     className={highlightProductId === f.productId ? 'ring-2 ring-blue-400 ring-inset bg-blue-50 transition-all' : ''}>
                     <ForecastRow forecast={f} qty={qtys.get(f.productId) ?? 0}
-                      onChange={setQty} imageUrl={productImageMap?.get(f.productId)} />
+                      onChange={setQty} imageUrl={productImageMap?.get(f.productId)}
+                      posData={posMap.get(f.itemNumber) || posMap.get(f.itemNumber.replace(/^STR0*/, '')) || null} />
                   </div>
                 ))
               )}
@@ -907,7 +925,8 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
                     <div key={f.productId} ref={(el) => { if (el) rowRefs.current.set(f.productId, el) }}
                       className={highlightProductId === f.productId ? 'ring-2 ring-blue-400 ring-inset bg-blue-50 transition-all' : ''}>
                       <ForecastRow forecast={f} qty={qtys.get(f.productId) ?? 0}
-                        onChange={setQty} imageUrl={productImageMap?.get(f.productId)} />
+                        onChange={setQty} imageUrl={productImageMap?.get(f.productId)}
+                      posData={posMap.get(f.itemNumber) || posMap.get(f.itemNumber.replace(/^STR0*/, '')) || null} />
                     </div>
                   ))}
                 </div>
