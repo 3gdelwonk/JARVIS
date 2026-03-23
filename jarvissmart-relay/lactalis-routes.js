@@ -1,0 +1,126 @@
+// ═══════════════════════════════════════════════
+// ROUTES — /api/lactalis (Lactalis Portal Relay)
+// ═══════════════════════════════════════════════
+// Relays order submission and delivery slot queries
+// to mylactalis.com.au via Playwright sessions.
+//
+// Requires LACTALIS_API_KEY env var for authenticated access.
+
+const express = require('express');
+const lactalis = require('../services/lactalis-session');
+
+const API_KEY = process.env.LACTALIS_API_KEY || '';
+
+module.exports = function (db, broadcast) {
+  const router = express.Router();
+
+  // ── API key middleware ──
+  // Protects all routes except /health (which returns limited info without auth)
+  function requireApiKey(req, res, next) {
+    if (!API_KEY) {
+      // No key configured = open access (backwards compat during setup)
+      return next();
+    }
+    const provided = req.headers['x-api-key'] || req.query.apiKey || '';
+    if (provided !== API_KEY) {
+      return res.status(401).json({ error: 'Invalid or missing API key' });
+    }
+    next();
+  }
+
+  // GET /api/lactalis/health — session & system status (no Playwright)
+  router.get('/health', (req, res) => {
+    try {
+      const status = lactalis.checkConnection();
+      res.json(status);
+    } catch (err) {
+      res.json({ configured: false, error: err.message });
+    }
+  });
+
+  // POST /api/lactalis/login — force a fresh Playwright login
+  router.post('/login', requireApiKey, async (req, res) => {
+    try {
+      await lactalis.login();
+      res.json({ success: true, message: 'Logged in to Lactalis portal' });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // POST /api/lactalis/submit-order — full Playwright session to submit
+  // Body: { lines: [{ itemNumber: "801", qty: 3 }, ...] }
+  router.post('/submit-order', requireApiKey, async (req, res) => {
+    try {
+      const { lines } = req.body;
+      if (!Array.isArray(lines) || lines.length === 0) {
+        return res.status(400).json({ success: false, error: 'lines array is required' });
+      }
+
+      for (const line of lines) {
+        if (!line.itemNumber || typeof line.qty !== 'number' || line.qty < 0) {
+          return res.status(400).json({
+            success: false,
+            error: `Invalid line: ${JSON.stringify(line)} — need itemNumber (string) and qty (number)`,
+          });
+        }
+      }
+
+      const result = await lactalis.submitOrder(lines);
+
+      if (typeof broadcast === 'function') {
+        broadcast({
+          type: 'LACTALIS_ORDER_SUBMITTED',
+          items: lines.filter(l => l.qty > 0).length,
+          timestamp: Date.now(),
+        });
+      }
+
+      res.json(result);
+    } catch (err) {
+      console.error('  [Lactalis] Order submission failed:', err.message);
+      res.status(502).json({ success: false, error: err.message });
+    }
+  });
+
+  // GET /api/lactalis/delivery-slots — cached, refreshed every 24h
+  router.get('/delivery-slots', requireApiKey, async (req, res) => {
+    try {
+      const data = await lactalis.getDeliverySlots();
+      const nextAvailable = data.slots.find(s => s.status === 1) || null;
+
+      res.json({
+        slots: data.slots,
+        nextDelivery: nextAvailable,
+        count: data.slots.length,
+        cachedAt: data.cachedAt,
+        stale: data.stale || false,
+      });
+    } catch (err) {
+      console.error('  [Lactalis] Delivery slots fetch failed:', err.message);
+      res.status(502).json({ error: 'Could not fetch delivery slots', detail: err.message });
+    }
+  });
+
+  // GET /api/lactalis/refresh-slots — force slot cache refresh
+  router.get('/refresh-slots', requireApiKey, async (req, res) => {
+    try {
+      const data = await lactalis.getDeliverySlots(true);
+      const nextAvailable = data.slots.find(s => s.status === 1) || null;
+
+      res.json({
+        slots: data.slots,
+        nextDelivery: nextAvailable,
+        count: data.slots.length,
+        cachedAt: data.cachedAt,
+        stale: false,
+        message: 'Slot cache refreshed',
+      });
+    } catch (err) {
+      console.error('  [Lactalis] Slot refresh failed:', err.message);
+      res.status(502).json({ error: 'Could not refresh delivery slots', detail: err.message });
+    }
+  });
+
+  return router;
+};
