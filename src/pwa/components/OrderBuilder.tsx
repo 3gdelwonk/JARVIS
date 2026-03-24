@@ -101,6 +101,7 @@ interface RowProps {
 }
 
 const ForecastRow = memo(function ForecastRow({ forecast: f, qty, onChange, imageUrl, posData }: RowProps) {
+  const inputRef = useRef<HTMLInputElement>(null)
   const isLive = posData !== undefined && posData !== null
   const stockLabel = f.currentStock !== null
     ? `${f.currentStock} in stock`
@@ -165,9 +166,24 @@ const ForecastRow = memo(function ForecastRow({ forecast: f, qty, onChange, imag
         </div>
 
         <input
+          ref={inputRef}
           type="text" inputMode="numeric" pattern="[0-9]*"
           value={qty === 0 ? '' : String(qty)}
           placeholder="0"
+          onTouchStart={(e) => {
+            // Prevent accidental focus during scroll — require a deliberate tap
+            const el = e.currentTarget
+            const startY = e.touches[0]?.clientY ?? 0
+            const onTouchEnd = (te: TouchEvent) => {
+              const endY = te.changedTouches[0]?.clientY ?? 0
+              if (Math.abs(endY - startY) > 10) {
+                // User scrolled — blur to prevent keyboard from opening
+                el.blur()
+              }
+              el.removeEventListener('touchend', onTouchEnd)
+            }
+            el.addEventListener('touchend', onTouchEnd, { once: true })
+          }}
           onChange={(e) => {
             const val = e.target.value.replace(/[^0-9]/g, '')
             onChange(f.productId, val === '' ? 0 : parseInt(val, 10))
@@ -597,6 +613,7 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
   const [loading, setLoading] = useState(true)
   const [approving, setApproving] = useState(false)
   const [showOk, setShowOk] = useState(false)
+  const [showConfirm, setShowConfirm] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [showCamera, setShowCamera] = useState(false)
@@ -719,13 +736,25 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
     setQtys(next)
   }
 
-  async function handleApprove() {
+  function handleApprove() {
+    const lines = forecasts
+      .map((f) => ({ f, qty: qtys.get(f.productId) ?? 0 }))
+      .filter(({ qty }) => qty > 0)
+    if (lines.length === 0) return
+    setShowConfirm(true)
+  }
+
+  async function confirmAndSave() {
     const lines = forecasts
       .map((f) => ({ f, qty: qtys.get(f.productId) ?? 0 }))
       .filter(({ qty }) => qty > 0)
     if (lines.length === 0) return
 
+    console.log('[OrderBuilder] Saving order:', lines.length, 'items',
+      lines.map(({ f, qty }) => `${f.productName} ×${qty}`))
+
     setApproving(true)
+    setShowConfirm(false)
     try {
       const totalCost = lines.reduce((s, { f, qty }) => s + qty * f.lactalisCostPrice, 0)
       const nextDelivery = nextDeliveryDate()
@@ -796,7 +825,7 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
         <button onClick={onCancel} className="p-1.5 -ml-1 text-gray-500" aria-label="Cancel">
           <ArrowLeft size={18} />
         </button>
-        <p className="text-xs text-gray-500">{forecasts.length} products · {totalItems} to order</p>
+        <p className="text-xs text-gray-500">{forecasts.length} products · {totalItems} to order <span className="text-gray-300">v2.1</span></p>
         <div className="flex items-center gap-1.5">
           <button onClick={resetToZero}
             className="flex items-center gap-1 text-xs text-gray-500 px-2 py-1 rounded border border-gray-200">
@@ -940,6 +969,49 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
           </div>
         )
       })()}
+
+      {/* Confirmation modal */}
+      {showConfirm && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40" onClick={() => setShowConfirm(false)}>
+          <div
+            className="w-full max-w-[480px] bg-white rounded-t-2xl shadow-xl max-h-[70vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 border-b border-gray-200 shrink-0">
+              <p className="text-sm font-semibold text-gray-900">Confirm Order ({orderLines.length} items)</p>
+              <p className="text-xs text-gray-500 mt-0.5">
+                ${totalCostCalc.toFixed(2)} est.
+              </p>
+            </div>
+            <div className="flex-1 overflow-auto px-4 py-2">
+              {orderLines.map(({ f, qty }) => (
+                <div key={f.productId} className="flex items-center justify-between py-1.5 border-b border-gray-50 last:border-0">
+                  <p className="text-sm text-gray-800 truncate flex-1 mr-2">{f.productName}</p>
+                  <div className="text-right shrink-0">
+                    <span className="text-sm font-semibold text-gray-900">{qty}</span>
+                    <span className="text-[11px] text-gray-400 ml-1.5">${(qty * f.lactalisCostPrice).toFixed(2)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="px-4 py-3 border-t border-gray-200 flex gap-2 shrink-0">
+              <button
+                onClick={() => setShowConfirm(false)}
+                className="flex-1 py-2.5 rounded-xl border border-gray-300 text-sm font-medium text-gray-700"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmAndSave}
+                disabled={approving}
+                className="flex-1 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-semibold disabled:opacity-40"
+              >
+                {approving ? 'Saving…' : 'Confirm Order'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Summary + Done bar */}
       <div
