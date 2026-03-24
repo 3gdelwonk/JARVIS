@@ -713,9 +713,9 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
     setQtys((prev) => new Map(prev).set(productId, qty))
   }, [])
 
-  function resetToSuggested() {
+  function resetToZero() {
     const next = new Map<number, number>()
-    for (const f of forecasts) next.set(f.productId, f.suggestedQty)
+    for (const f of forecasts) next.set(f.productId, 0)
     setQtys(next)
   }
 
@@ -798,13 +798,9 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
         </button>
         <p className="text-xs text-gray-500">{forecasts.length} products · {totalItems} to order</p>
         <div className="flex items-center gap-1.5">
-          <button onClick={resetToSuggested}
+          <button onClick={resetToZero}
             className="flex items-center gap-1 text-xs text-gray-500 px-2 py-1 rounded border border-gray-200">
-            <RotateCcw size={12} />Reset
-          </button>
-          <button onClick={load}
-            className="flex items-center gap-1 text-xs text-gray-500 px-2 py-1 rounded border border-gray-200">
-            <RefreshCw size={12} />Refresh
+            <RotateCcw size={12} />Clear
           </button>
         </div>
       </div>
