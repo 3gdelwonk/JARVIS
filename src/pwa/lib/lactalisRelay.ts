@@ -29,7 +29,9 @@ export function setApiKey(key: string) {
   localStorage.setItem(API_KEY_KEY, key.trim())
 }
 
-async function relayFetch<T>(path: string, options?: RequestInit): Promise<T> {
+const DEFAULT_TIMEOUT_MS = 90_000 // 90s — Playwright login + order can take a while
+
+async function relayFetch<T>(path: string, options?: RequestInit & { timeoutMs?: number }): Promise<T> {
   const base = getRelayUrl()
   const apiKey = getApiKey()
   const headers: Record<string, string> = {
@@ -38,12 +40,29 @@ async function relayFetch<T>(path: string, options?: RequestInit): Promise<T> {
   }
   if (apiKey) headers['X-API-Key'] = apiKey
 
-  const res = await fetch(`${base}${path}`, { ...options, headers })
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: res.statusText }))
-    throw new Error(body.error || body.detail || `Relay ${res.status}`)
+  const timeout = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeout)
+
+  try {
+    const res = await fetch(`${base}${path}`, {
+      ...options,
+      headers,
+      signal: controller.signal,
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ error: res.statusText }))
+      throw new Error(body.error || body.detail || `Relay ${res.status}`)
+    }
+    return res.json() as Promise<T>
+  } catch (err: any) {
+    if (err.name === 'AbortError') {
+      throw new Error(`Relay request timed out after ${Math.round(timeout / 1000)}s — JARVISmart may be unresponsive`)
+    }
+    throw err
+  } finally {
+    clearTimeout(timer)
   }
-  return res.json() as Promise<T>
 }
 
 // ── Health check ──
@@ -66,7 +85,7 @@ export interface HealthResponse {
 
 export async function checkRelay(): Promise<HealthResponse> {
   try {
-    const data = await relayFetch<any>('/api/lactalis/health')
+    const data = await relayFetch<any>('/api/lactalis/health', { timeoutMs: 10_000 })
 
     // New minimal-login format: { configured, cookiesOnDisk, cookieAge, ... }
     if ('configured' in data) {
