@@ -330,8 +330,31 @@ function OrderDetailView({ orderId, onBack }: OrderDetailProps) {
   })
 
   async function handleRelaySubmit() {
+    // Re-check relay health right before submitting
     setRelayStatus('submitting')
     setRelayError(null)
+
+    let health: { connected: boolean; reason?: string }
+    try {
+      health = await checkRelay()
+    } catch {
+      health = { connected: false, reason: 'Could not reach JARVISmart' }
+    }
+    setRelayHealth(health)
+    if (!health.connected) {
+      setRelayStatus('error')
+      setRelayError(`JARVISmart unreachable: ${health.reason || 'unknown'} — cannot submit`)
+      return
+    }
+
+    // Request a wake lock so iOS doesn't kill the fetch while Playwright runs (~15-25s)
+    let wakeLock: WakeLockSentinel | null = null
+    try {
+      if ('wakeLock' in navigator) {
+        wakeLock = await (navigator as any).wakeLock.request('screen')
+      }
+    } catch { /* wake lock is best-effort */ }
+
     try {
       const relayLines = activeLines.map(l => ({ itemNumber: l.itemNumber, qty: l.approvedQty }))
       const result = await relaySubmitOrder(relayLines)
@@ -344,7 +367,18 @@ function OrderDetailView({ orderId, onBack }: OrderDetailProps) {
       }
     } catch (err: any) {
       setRelayStatus('error')
-      setRelayError(err.message)
+      const msg: string = err.message || ''
+      // Safari says "Load failed", Chrome says "Failed to fetch" for network errors
+      if (/load failed|failed to fetch|networkerror|abort/i.test(msg)) {
+        setRelayError(
+          'Connection to JARVISmart lost — the server may have dropped during the Playwright submission. ' +
+          'Keep this screen active while submitting (don\'t lock or switch apps). Check that JARVISmart is running.'
+        )
+      } else {
+        setRelayError(msg)
+      }
+    } finally {
+      wakeLock?.release().catch(() => {})
     }
   }
 
