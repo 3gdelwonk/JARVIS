@@ -277,10 +277,20 @@ async function _submitOrderPlaywright(products, isRetry = false) {
     // Check if already logged in (redirected away from login)
     const currentUrl = page.url();
     if (currentUrl.includes('/login')) {
-      // Need to actually login
-      const challengeEl = await page.$('iframe[src*="_Incapsula"], #recaptcha, .g-recaptcha, [class*="captcha"]');
-      if (challengeEl) {
-        throw new Error('Portal bot detection triggered (CAPTCHA) — place order manually');
+      // Detect Incapsula/bot protection — check multiple signals
+      const blocked = await page.evaluate(() => {
+        const html = document.documentElement.innerHTML.toLowerCase();
+        // Incapsula block page markers
+        if (html.includes('_incapsula') || html.includes('incap_ses') || html.includes('visid_incap')) return 'incapsula_cookie';
+        if (html.includes('request unsuccessful') || html.includes('incident id')) return 'incapsula_block';
+        if (document.querySelector('iframe[src*="_Incapsula"], iframe[src*="captcha"]')) return 'incapsula_iframe';
+        if (document.querySelector('#recaptcha, .g-recaptcha, [class*="captcha"]')) return 'captcha';
+        // JS challenge — page has almost no real content
+        if (!document.querySelector('form') && html.length < 5000) return 'js_challenge';
+        return null;
+      });
+      if (blocked) {
+        throw new Error(`Portal bot detection triggered (${blocked}) — place order manually`);
       }
 
       const usernameInput = await page.waitForSelector(
@@ -330,6 +340,17 @@ async function _submitOrderPlaywright(products, isRetry = false) {
       throw new Error('Session lost during order — redirected to login after retry');
     }
 
+    // Check if quick-add page is actually an Incapsula block
+    const quickAddBlocked = await page.evaluate(() => {
+      const html = document.documentElement.innerHTML.toLowerCase();
+      if (html.includes('_incapsula') || html.includes('request unsuccessful') || html.includes('incident id')) return true;
+      if (!document.querySelector('form') && html.length < 5000) return true;
+      return false;
+    });
+    if (quickAddBlocked) {
+      throw new Error('Quick Order page blocked by Incapsula — place order manually');
+    }
+
     // ── Step 3: Extract CSRF token from page DOM ──
     const csrfToken = await page.evaluate(() => {
       const input = document.querySelector('input[name="oro_product_quick_add[_token]"]');
@@ -337,46 +358,67 @@ async function _submitOrderPlaywright(products, isRetry = false) {
     });
 
     if (!csrfToken) {
-      throw new Error('CSRF token not found on Quick Order page');
+      // Capture what we actually got for debugging
+      const pageTitle = await page.title().catch(() => '(unknown)');
+      const pageUrl = page.url();
+      console.error(`  [Lactalis] CSRF missing — page title: "${pageTitle}", URL: ${pageUrl}`);
+      throw new Error(`CSRF token not found on Quick Order page (got: "${pageTitle}" at ${pageUrl})`);
     }
 
     console.log('  [Lactalis] CSRF token extracted — submitting order...');
 
-    // ── Step 4: Submit order via fetch within browser context ──
+    // ── Step 4: Submit order via fetch within browser context (with 30s timeout) ──
     const result = await page.evaluate(async ({ products, csrfToken, portalUrl }) => {
-      const form = new FormData();
-      form.append('oro_product_quick_add[component]', 'oro_shopping_list_to_checkout_quick_add_processor');
-      form.append('oro_product_quick_add[additional]', '');
-      form.append('oro_product_quick_add[transition]', 'start_from_quickorderform');
-      form.append('oro_product_quick_add[_token]', csrfToken);
-      form.append('oro_product_quick_add[products]', JSON.stringify(products));
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 30000);
 
-      const res = await fetch(`${portalUrl}/customer/product/quick-add/`, {
-        method: 'POST',
-        body: form,
-        redirect: 'manual',
-      });
+      try {
+        const form = new FormData();
+        form.append('oro_product_quick_add[component]', 'oro_shopping_list_to_checkout_quick_add_processor');
+        form.append('oro_product_quick_add[additional]', '');
+        form.append('oro_product_quick_add[transition]', 'start_from_quickorderform');
+        form.append('oro_product_quick_add[_token]', csrfToken);
+        form.append('oro_product_quick_add[products]', JSON.stringify(products));
 
-      if (res.status === 302 || res.status === 301) {
-        return { success: true, redirectUrl: res.headers.get('location') };
-      }
+        const res = await fetch(`${portalUrl}/customer/product/quick-add/`, {
+          method: 'POST',
+          body: form,
+          redirect: 'manual',
+          signal: controller.signal,
+        });
 
-      if (res.type === 'opaqueredirect') {
-        // redirect: 'manual' returns opaque redirect in browser context
-        return { success: true, redirectUrl: null };
-      }
-
-      if (res.ok) {
-        const text = await res.text();
-        try {
-          const json = JSON.parse(text);
-          return { success: true, redirectUrl: json.redirectUrl || json.url || null };
-        } catch {
-          return { success: true };
+        if (res.status === 302 || res.status === 301) {
+          return { success: true, redirectUrl: res.headers.get('location') };
         }
-      }
 
-      return { success: false, error: `Lactalis returned ${res.status}` };
+        if (res.type === 'opaqueredirect') {
+          // redirect: 'manual' returns opaque redirect in browser context
+          return { success: true, redirectUrl: null };
+        }
+
+        if (res.ok) {
+          const text = await res.text();
+          // Check if we got an Incapsula block page instead of a real response
+          if (text.includes('_Incapsula') || text.includes('Request unsuccessful') || text.includes('incident ID')) {
+            return { success: false, error: 'Order POST blocked by Incapsula — place order manually' };
+          }
+          try {
+            const json = JSON.parse(text);
+            return { success: true, redirectUrl: json.redirectUrl || json.url || null };
+          } catch {
+            return { success: true };
+          }
+        }
+
+        return { success: false, error: `Lactalis returned ${res.status}` };
+      } catch (err) {
+        if (err.name === 'AbortError') {
+          return { success: false, error: 'Order POST to Lactalis timed out after 30s' };
+        }
+        return { success: false, error: err.message || 'Fetch failed inside browser' };
+      } finally {
+        clearTimeout(timer);
+      }
     }, { products, csrfToken, portalUrl: PORTAL_URL });
 
     if (!result.success) {

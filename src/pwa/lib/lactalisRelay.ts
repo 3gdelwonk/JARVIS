@@ -59,6 +59,10 @@ async function relayFetch<T>(path: string, options?: RequestInit & { timeoutMs?:
     if (err.name === 'AbortError') {
       throw new Error(`Relay request timed out after ${Math.round(timeout / 1000)}s — JARVISmart may be unresponsive`)
     }
+    // Safari says "Load failed", Chrome says "Failed to fetch"
+    if (/load failed|failed to fetch|networkerror/i.test(err.message || '')) {
+      throw new Error('Cannot reach JARVISmart — check that the server is running and the URL is correct')
+    }
     throw err
   } finally {
     clearTimeout(timer)
