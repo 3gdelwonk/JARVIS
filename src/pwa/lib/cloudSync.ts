@@ -76,6 +76,8 @@ export function getSyncStatus(): SyncStatus {
 
 // ── HTTP helper ──
 
+const SYNC_TIMEOUT_MS = 30_000 // 30s — sync batches are small but may be slow on mobile
+
 async function syncFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const base = getRelayUrl()
   const apiKey = getApiKey()
@@ -85,12 +87,28 @@ async function syncFetch<T>(path: string, options?: RequestInit): Promise<T> {
   }
   if (apiKey) headers['X-API-Key'] = apiKey
 
-  const res = await fetch(`${base}/api/sync${path}`, { ...options, headers })
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: res.statusText }))
-    throw new Error(body.error || `Sync ${res.status}`)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), SYNC_TIMEOUT_MS)
+
+  try {
+    const res = await fetch(`${base}/api/sync${path}`, { ...options, headers, signal: controller.signal })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ error: res.statusText }))
+      throw new Error(body.error || `Sync ${res.status}`)
+    }
+    return res.json() as Promise<T>
+  } catch (err: any) {
+    if (err.name === 'AbortError') {
+      throw new Error('Sync request timed out — JARVISmart may be unresponsive')
+    }
+    // Safari says "Load failed", Chrome says "Failed to fetch"
+    if (/load failed|failed to fetch|networkerror/i.test(err.message || '')) {
+      throw new Error('Cannot reach JARVISmart — check that the server is running and the URL is correct')
+    }
+    throw err
+  } finally {
+    clearTimeout(timer)
   }
-  return res.json() as Promise<T>
 }
 
 // ── Push ──

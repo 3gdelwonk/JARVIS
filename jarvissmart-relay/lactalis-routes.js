@@ -35,6 +35,10 @@ module.exports = function (db, broadcast) {
   // POST /api/lactalis/submit-order — full Playwright session to submit
   // Body: { lines: [{ itemNumber: "801", qty: 3 }, ...] }
   router.post('/submit-order', async (req, res) => {
+    const startTime = Date.now();
+    const itemCount = req.body?.lines?.length || 0;
+    console.log(`  [Lactalis] ▶ Order request received (${itemCount} lines)`);
+
     try {
       const { lines } = req.body;
       if (!Array.isArray(lines) || lines.length === 0) {
@@ -51,6 +55,8 @@ module.exports = function (db, broadcast) {
       }
 
       const result = await lactalis.submitOrder(lines);
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      console.log(`  [Lactalis] ✓ Order response sent (${elapsed}s, success: ${result.success})`);
 
       if (typeof broadcast === 'function') {
         broadcast({
@@ -62,7 +68,8 @@ module.exports = function (db, broadcast) {
 
       res.json(result);
     } catch (err) {
-      console.error('  [Lactalis] Order submission failed:', err.message);
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      console.error(`  [Lactalis] ✗ Order failed after ${elapsed}s:`, err.message);
       res.status(502).json({ success: false, error: err.message });
     }
   });

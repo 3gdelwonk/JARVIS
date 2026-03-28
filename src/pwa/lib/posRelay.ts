@@ -9,6 +9,8 @@
 
 import { getRelayUrl, getApiKey } from './lactalisRelay'
 
+const POS_TIMEOUT_MS = 15_000 // 15s — POS queries should be fast
+
 async function posFetch<T>(path: string, params?: Record<string, string>): Promise<T> {
   const base = getRelayUrl()
   const apiKey = getApiKey()
@@ -24,12 +26,28 @@ async function posFetch<T>(path: string, params?: Record<string, string>): Promi
     }
   }
 
-  const res = await fetch(url.toString(), { headers })
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: res.statusText }))
-    throw new Error(body.error || body.detail || `POS ${res.status}`)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), POS_TIMEOUT_MS)
+
+  try {
+    const res = await fetch(url.toString(), { headers, signal: controller.signal })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ error: res.statusText }))
+      throw new Error(body.error || body.detail || `POS ${res.status}`)
+    }
+    return res.json() as Promise<T>
+  } catch (err: any) {
+    if (err.name === 'AbortError') {
+      throw new Error('POS request timed out — JARVISmart may be unresponsive')
+    }
+    // Safari says "Load failed", Chrome says "Failed to fetch"
+    if (/load failed|failed to fetch|networkerror/i.test(err.message || '')) {
+      throw new Error('Cannot reach JARVISmart — check that the server is running and the URL is correct')
+    }
+    throw err
+  } finally {
+    clearTimeout(timer)
   }
-  return res.json() as Promise<T>
 }
 
 // ── POS Health ──
