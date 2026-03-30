@@ -173,8 +173,16 @@ async function gmailGet(token: string, path: string, params?: Record<string, str
 async function listMessages(token: string, afterDate?: string): Promise<GmailMessage[]> {
   let q = LACTALIS_FROM
   if (afterDate) q += ` after:${afterDate}`
-  const data = await gmailGet(token, '/messages', { q, maxResults: '100' }) as { messages?: GmailMessage[] }
-  return data.messages ?? []
+  const all: GmailMessage[] = []
+  let pageToken: string | undefined
+  do {
+    const params: Record<string, string> = { q, maxResults: '100' }
+    if (pageToken) params.pageToken = pageToken
+    const data = await gmailGet(token, '/messages', params) as { messages?: GmailMessage[]; nextPageToken?: string }
+    if (data.messages) all.push(...data.messages)
+    pageToken = data.nextPageToken
+  } while (pageToken)
+  return all
 }
 
 async function fetchMessage(token: string, id: string): Promise<GmailFullMessage> {
@@ -225,11 +233,14 @@ export async function syncGmailOrders(): Promise<{ count: number; processed: num
   const token = await getValidToken()
   const errors: string[] = []
 
+  // Retry previously failed parses (parser may have been improved)
+  await db.gmailSyncLog.filter((r) => !r.parsed).delete()
+
   const lastSync = localStorage.getItem(LS_LAST_SYNC)
   let afterDate: string | undefined
   if (lastSync) {
     const d = new Date(lastSync)
-    d.setDate(d.getDate() - 7)
+    d.setDate(d.getDate() - 30)
     afterDate = `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
   }
 
