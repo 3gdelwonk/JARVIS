@@ -447,67 +447,73 @@ async function _submitOrderPlaywright(products, isRetry = false) {
         const res = await fetch(`${portalUrl}/customer/product/quick-add/`, {
           method: 'POST',
           body: form,
-          redirect: 'manual',
+          redirect: 'follow',
           signal: controller.signal,
         });
 
-        if (res.status === 302 || res.status === 301) {
-          return { success: true, redirectUrl: res.headers.get('location') };
+        const finalUrl = res.url || '';
+        const text = await res.text();
+
+        // Check if redirected back to login (session lost)
+        if (finalUrl.includes('/login')) {
+          return { success: false, error: 'Session lost during order POST — redirected to login' };
         }
 
-        if (res.type === 'opaqueredirect') {
-          // redirect: 'manual' returns opaque redirect in browser context
-          return { success: true, redirectUrl: null };
+        // Check for Incapsula block
+        if (text.includes('Request unsuccessful') && text.includes('incident ID')) {
+          return { success: false, error: 'Order POST blocked by Incapsula — place order manually' };
         }
 
-        if (res.ok) {
-          const text = await res.text();
-          // Check if we got an Incapsula block page instead of a real response
-          if (text.includes('_Incapsula') || text.includes('Request unsuccessful') || text.includes('incident ID')) {
-            return { success: false, error: 'Order POST blocked by Incapsula — place order manually' };
+        // Check if redirected to checkout/confirmation (success)
+        // Success URLs typically contain: /checkout, /order/, /shopping-list, /rfq
+        if (finalUrl.includes('/checkout') || finalUrl.includes('/order/') ||
+            finalUrl.includes('/shopping-list') || finalUrl.includes('/rfq')) {
+          return { success: true, redirectUrl: finalUrl };
+        }
+
+        // If we're back on the Quick Order page, it's a validation error
+        if (finalUrl.includes('/quick-add') || finalUrl.includes('/quick-order')) {
+          // Parse HTML for error messages
+          const doc = new DOMParser().parseFromString(text, 'text/html');
+          const selectors = [
+            '.alert-error', '.alert-danger',
+            '.flash-messages-holder .alert',
+            '.notification-flash--error',
+            '.validation-failed', '.form-error-message',
+            '[data-role="flash-message"]', '.message-error',
+          ];
+          const msgs = [];
+          for (const sel of selectors) {
+            doc.querySelectorAll(sel).forEach(el => {
+              const t = el.textContent?.trim();
+              if (t && t.length > 0 && t.length < 500) msgs.push(t);
+            });
           }
-          try {
-            const json = JSON.parse(text);
-            return { success: true, redirectUrl: json.redirectUrl || json.url || null };
-          } catch {
-            // HTML response (not JSON) — NOT success.
-            // Success = 302 redirect. A 200 with HTML = form re-rendered with errors.
-            try {
-              const doc = new DOMParser().parseFromString(text, 'text/html');
-              const selectors = [
-                '.alert-error', '.alert-danger',
-                '.flash-messages-holder .alert',
-                '.notification-flash--error',
-                '.validation-failed', '.form-error-message',
-                '[data-role="flash-message"]', '.message-error',
-              ];
-              const msgs = [];
-              for (const sel of selectors) {
-                doc.querySelectorAll(sel).forEach(el => {
-                  const t = el.textContent?.trim();
-                  if (t && t.length > 0 && t.length < 500) msgs.push(t);
-                });
-              }
-              if (msgs.length > 0) {
-                return { success: false, error: 'Lactalis rejected the order: ' + msgs.join(' | '), htmlLength: text.length };
-              }
-              // No known error selectors matched — return page context
-              const title = doc.querySelector('title')?.textContent?.trim() || '';
-              const h1 = doc.querySelector('h1')?.textContent?.trim() || '';
-              const snippet = doc.body?.textContent?.trim().slice(0, 300) || '';
-              return {
-                success: false,
-                error: `Lactalis returned an unexpected page: "${title}" ${h1 ? '— ' + h1 : ''} — ${snippet}`,
-                htmlLength: text.length,
-                htmlSnippet: text.slice(0, 2000),
-              };
-            } catch {
-              return { success: false, error: 'Lactalis returned non-JSON HTML (' + text.length + ' bytes): ' + text.slice(0, 300) };
-            }
+          if (msgs.length > 0) {
+            return { success: false, error: 'Lactalis rejected the order: ' + msgs.join(' | ') };
           }
+          // No specific error found — return page snippet for debugging
+          const snippet = doc.body?.textContent?.trim().slice(0, 300) || '';
+          return { success: false, error: 'Order rejected — redirected back to Quick Order page: ' + snippet, htmlSnippet: text.slice(0, 2000) };
         }
 
-        return { success: false, error: `Lactalis returned ${res.status}` };
+        // Try parsing as JSON (some endpoints return JSON)
+        try {
+          const json = JSON.parse(text);
+          if (json.success === false) {
+            return { success: false, error: json.error || json.message || 'Order rejected by Lactalis' };
+          }
+          return { success: true, redirectUrl: json.redirectUrl || json.url || finalUrl };
+        } catch {
+          // Unknown page — log details for debugging
+          const doc = new DOMParser().parseFromString(text, 'text/html');
+          const title = doc.querySelector('title')?.textContent?.trim() || '';
+          return {
+            success: false,
+            error: `Unexpected response — landed on "${title}" (${finalUrl})`,
+            htmlSnippet: text.slice(0, 2000),
+          };
+        }
       } catch (err) {
         if (err.name === 'AbortError') {
           return { success: false, error: 'Order POST to Lactalis timed out after 30s' };
