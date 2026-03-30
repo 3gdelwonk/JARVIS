@@ -112,6 +112,12 @@ function recordLoginSuccess() {
   nextRetryAt = 0;
 }
 
+function resetBackoff() {
+  console.log(`  [Lactalis] Manual backoff reset (was ${consecutiveFailures} failures)`);
+  consecutiveFailures = 0;
+  nextRetryAt = 0;
+}
+
 // ── Login deduplication ──
 
 let _loginPromise = null;
@@ -265,6 +271,8 @@ async function _submitOrderPlaywright(products, isRetry = false) {
   try {
     const context = await browser.newContext({
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      viewport: { width: 1920, height: 1080 },
+      screen: { width: 1920, height: 1080 },
     });
     const page = await context.newPage();
 
@@ -557,7 +565,11 @@ async function _submitOrderPlaywright(products, isRetry = false) {
 
     throw err;
   } finally {
-    await browser.close().catch(() => {});
+    // Close browser with 5s timeout to prevent orphaned processes
+    await Promise.race([
+      browser.close(),
+      new Promise(r => setTimeout(r, 5000)),
+    ]).catch(() => {});
     console.log('  [Lactalis] Order browser closed');
   }
 }
@@ -599,6 +611,8 @@ async function _fetchSlotsPlaywright() {
   try {
     const context = await browser.newContext({
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      viewport: { width: 1920, height: 1080 },
+      screen: { width: 1920, height: 1080 },
     });
     const page = await context.newPage();
 
@@ -764,5 +778,6 @@ module.exports = {
   submitOrder,
   getDeliverySlots,
   checkConnection,
+  resetBackoff,
   PORTAL_URL,
 };

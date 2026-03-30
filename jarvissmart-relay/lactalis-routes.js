@@ -16,9 +16,9 @@ module.exports = function (db, broadcast) {
   // ── Async order jobs ──
   const orderJobs = new Map(); // jobId → { status, result?, error?, startedAt }
 
-  // Cleanup jobs older than 5 minutes every 60s
+  // Cleanup jobs older than 15 minutes every 60s
   setInterval(() => {
-    const cutoff = Date.now() - 5 * 60_000;
+    const cutoff = Date.now() - 15 * 60_000;
     for (const [id, job] of orderJobs) {
       if (job.startedAt < cutoff) orderJobs.delete(id);
     }
@@ -140,12 +140,20 @@ module.exports = function (db, broadcast) {
       return res.json({ status: 'processing', elapsed });
     }
     if (job.status === 'done') {
-      orderJobs.delete(req.params.jobId);
       return res.json({ status: 'done', success: true, ...job.result });
     }
     // failed
-    orderJobs.delete(req.params.jobId);
     return res.json({ status: 'failed', success: false, error: job.error, elapsed });
+  });
+
+  // POST /api/lactalis/reset-backoff — manually clear login backoff counter
+  router.post('/reset-backoff', (req, res) => {
+    if (lactalis.resetBackoff) {
+      lactalis.resetBackoff();
+      res.json({ success: true, message: 'Login backoff counter reset' });
+    } else {
+      res.json({ success: true, message: 'No resetBackoff function available' });
+    }
   });
 
   // GET /api/lactalis/delivery-slots — cached, refreshed every 24h
