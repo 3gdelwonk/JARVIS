@@ -464,16 +464,26 @@ async function _submitOrderPlaywright(products, isRetry = false) {
           return { success: false, error: 'Order POST blocked by Incapsula — place order manually' };
         }
 
+        // Try parsing as JSON first — Lactalis returns JSON for successful orders
+        // e.g. {"success":true,"redirectUrl":"/customer/checkout/1757813"}
+        try {
+          const json = JSON.parse(text);
+          if (json.success === false) {
+            return { success: false, error: json.error || json.message || 'Order rejected by Lactalis' };
+          }
+          return { success: true, redirectUrl: json.redirectUrl || json.url || finalUrl };
+        } catch {
+          // Not JSON — check URL and HTML for success/error signals
+        }
+
         // Check if redirected to checkout/confirmation (success)
-        // Success URLs typically contain: /checkout, /order/, /shopping-list, /rfq
         if (finalUrl.includes('/checkout') || finalUrl.includes('/order/') ||
             finalUrl.includes('/shopping-list') || finalUrl.includes('/rfq')) {
           return { success: true, redirectUrl: finalUrl };
         }
 
-        // If we're back on the Quick Order page, it's a validation error
+        // If we're back on the Quick Order page with HTML, it's a validation error
         if (finalUrl.includes('/quick-add') || finalUrl.includes('/quick-order')) {
-          // Parse HTML for error messages
           const doc = new DOMParser().parseFromString(text, 'text/html');
           const selectors = [
             '.alert-error', '.alert-danger',
@@ -492,28 +502,18 @@ async function _submitOrderPlaywright(products, isRetry = false) {
           if (msgs.length > 0) {
             return { success: false, error: 'Lactalis rejected the order: ' + msgs.join(' | ') };
           }
-          // No specific error found — return page snippet for debugging
           const snippet = doc.body?.textContent?.trim().slice(0, 300) || '';
-          return { success: false, error: 'Order rejected — redirected back to Quick Order page: ' + snippet, htmlSnippet: text.slice(0, 2000) };
+          return { success: false, error: 'Order rejected — redirected back to Quick Order: ' + snippet, htmlSnippet: text.slice(0, 2000) };
         }
 
-        // Try parsing as JSON (some endpoints return JSON)
-        try {
-          const json = JSON.parse(text);
-          if (json.success === false) {
-            return { success: false, error: json.error || json.message || 'Order rejected by Lactalis' };
-          }
-          return { success: true, redirectUrl: json.redirectUrl || json.url || finalUrl };
-        } catch {
-          // Unknown page — log details for debugging
-          const doc = new DOMParser().parseFromString(text, 'text/html');
-          const title = doc.querySelector('title')?.textContent?.trim() || '';
-          return {
-            success: false,
-            error: `Unexpected response — landed on "${title}" (${finalUrl})`,
-            htmlSnippet: text.slice(0, 2000),
-          };
-        }
+        // Unknown response
+        const doc = new DOMParser().parseFromString(text, 'text/html');
+        const title = doc.querySelector('title')?.textContent?.trim() || '';
+        return {
+          success: false,
+          error: `Unexpected response — landed on "${title}" (${finalUrl})`,
+          htmlSnippet: text.slice(0, 2000),
+        };
       } catch (err) {
         if (err.name === 'AbortError') {
           return { success: false, error: 'Order POST to Lactalis timed out after 30s' };
