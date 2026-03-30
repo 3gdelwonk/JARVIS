@@ -33,6 +33,7 @@ import {
   syncGmailOrders,
   isGmailConnected,
   getGmailLastSync,
+  getGmailEmail,
 } from '../lib/gmailSync'
 
 interface Props {
@@ -415,7 +416,7 @@ export default function SettingsSheet({ onClose }: Props) {
                 </p>
               )}
               <p className="text-[11px] text-gray-400">
-                Device: {syncStatus.deviceId.slice(0, 8)}… · Syncs automatically every 12 hours
+                Device: {syncStatus.deviceId.slice(0, 8)}… · Syncs every 30 min + on foreground
               </p>
             </div>
           </div>
@@ -425,7 +426,9 @@ export default function SettingsSheet({ onClose }: Props) {
             <div className="flex items-center justify-between mb-2">
               <p className="text-sm font-medium text-gray-700">Gmail Order Sync</p>
               {gmailConnected && (
-                <span className="text-[11px] text-green-600">Connected</span>
+                <span className="text-[11px] text-green-600">
+                  {getGmailEmail() ? `Connected (${getGmailEmail()})` : 'Connected'}
+                </span>
               )}
             </div>
             <div className="space-y-3">

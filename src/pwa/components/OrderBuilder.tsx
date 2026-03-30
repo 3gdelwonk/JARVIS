@@ -17,10 +17,13 @@ import {
   ChevronDown,
   ChevronUp,
   ImageOff,
+  Minus,
+  Plus,
   RefreshCw,
   RotateCcw,
   Search,
   ShoppingCart,
+  Sparkles,
   Trash2,
   X,
 } from 'lucide-react'
@@ -30,6 +33,7 @@ import { AVG_DELIVERY_COST, nextDeliveryDate, friendlyError } from '../lib/const
 import type { Order } from '../lib/types'
 import { submitOrder as relaySubmitOrder, checkRelay } from '../lib/lactalisRelay'
 import type { ItemPerformance } from '../lib/posRelay'
+import { getSyncStatus, syncPullOnly } from '../lib/cloudSync'
 
 const STATUS_BADGE: Record<Order['status'], string> = {
   draft:      'bg-gray-100 text-gray-600',
@@ -101,7 +105,6 @@ interface RowProps {
 }
 
 const ForecastRow = memo(function ForecastRow({ forecast: f, qty, onChange, imageUrl, posData }: RowProps) {
-  const inputRef = useRef<HTMLInputElement>(null)
   const isLive = posData !== undefined && posData !== null
   const stockLabel = f.currentStock !== null
     ? `${f.currentStock} in stock`
@@ -114,7 +117,7 @@ const ForecastRow = memo(function ForecastRow({ forecast: f, qty, onChange, imag
 
   return (
     <div className="px-3 py-2.5 border-b border-gray-100 last:border-0">
-      <div className="flex items-start justify-between gap-2">
+      <div className="flex items-start gap-2">
         <ProductThumb imageUrl={imageUrl} />
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium text-gray-900 leading-snug truncate">{f.productName}</p>
@@ -165,33 +168,49 @@ const ForecastRow = memo(function ForecastRow({ forecast: f, qty, onChange, imag
           </div>
         </div>
 
-        <input
-          ref={inputRef}
-          type="text" inputMode="numeric" pattern="[0-9]*"
-          value={qty === 0 ? '' : String(qty)}
-          placeholder="0"
-          onTouchStart={(e) => {
-            // Prevent accidental focus during scroll — require a deliberate tap
-            const el = e.currentTarget
-            const startY = e.touches[0]?.clientY ?? 0
-            const onTouchEnd = (te: TouchEvent) => {
-              const endY = te.changedTouches[0]?.clientY ?? 0
-              if (Math.abs(endY - startY) > 10) {
-                // User scrolled — blur to prevent keyboard from opening
-                el.blur()
+        {/* Quantity stepper */}
+        <div className="flex items-center shrink-0">
+          <button
+            onClick={() => onChange(f.productId, Math.max(0, qty - 1))}
+            className={`w-8 h-8 flex items-center justify-center rounded-l-lg border transition-colors ${
+              qty > 0
+                ? 'border-blue-300 bg-blue-50 text-blue-600 active:bg-blue-100'
+                : 'border-gray-200 bg-gray-50 text-gray-300'
+            }`}
+            aria-label="Decrease"
+          >
+            <Minus size={14} />
+          </button>
+          <input
+            type="text" inputMode="numeric" pattern="[0-9]*"
+            value={qty === 0 ? '' : String(qty)}
+            placeholder="0"
+            onTouchStart={(e) => {
+              const el = e.currentTarget
+              const startY = e.touches[0]?.clientY ?? 0
+              const onTouchEnd = (te: TouchEvent) => {
+                const endY = te.changedTouches[0]?.clientY ?? 0
+                if (Math.abs(endY - startY) > 10) el.blur()
+                el.removeEventListener('touchend', onTouchEnd)
               }
-              el.removeEventListener('touchend', onTouchEnd)
-            }
-            el.addEventListener('touchend', onTouchEnd, { once: true })
-          }}
-          onChange={(e) => {
-            const val = e.target.value.replace(/[^0-9]/g, '')
-            onChange(f.productId, val === '' ? 0 : parseInt(val, 10))
-          }}
-          className={`w-12 text-center text-sm font-semibold border rounded py-1 outline-none shrink-0 ${
-            qty > 0 ? 'border-blue-400 bg-blue-50 text-gray-900' : 'border-gray-200 text-gray-400'
-          }`}
-        />
+              el.addEventListener('touchend', onTouchEnd, { once: true })
+            }}
+            onChange={(e) => {
+              const val = e.target.value.replace(/[^0-9]/g, '')
+              onChange(f.productId, val === '' ? 0 : parseInt(val, 10))
+            }}
+            className={`w-10 h-8 text-center text-sm font-semibold border-y outline-none ${
+              qty > 0 ? 'border-blue-300 bg-blue-50 text-gray-900' : 'border-gray-200 text-gray-400'
+            }`}
+          />
+          <button
+            onClick={() => onChange(f.productId, qty + 1)}
+            className="w-8 h-8 flex items-center justify-center rounded-r-lg border border-blue-300 bg-blue-50 text-blue-600 active:bg-blue-100 transition-colors"
+            aria-label="Increase"
+          >
+            <Plus size={14} />
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -206,6 +225,8 @@ interface HistoryViewProps {
 
 function HistoryView({ onBuild, onViewOrder }: HistoryViewProps) {
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null)
+  const [lastPull, setLastPull] = useState(() => getSyncStatus().lastPull)
+  const [pulling, setPulling] = useState(false)
 
   const orders = useLiveQuery(
     () => db.orders.orderBy('createdAt').reverse().toArray(),
@@ -218,6 +239,13 @@ function HistoryView({ onBuild, onViewOrder }: HistoryViewProps) {
     setConfirmDeleteId(null)
   }
 
+  async function handlePullRefresh() {
+    setPulling(true)
+    await syncPullOnly()
+    setLastPull(getSyncStatus().lastPull)
+    setPulling(false)
+  }
+
   return (
     <div className="flex flex-col h-full">
       <div className="px-3 py-2 border-b border-gray-200 bg-white shrink-0">
@@ -228,6 +256,21 @@ function HistoryView({ onBuild, onViewOrder }: HistoryViewProps) {
           <ShoppingCart size={16} />
           Build New Order
         </button>
+        <div className="flex items-center justify-between mt-1.5">
+          <span className="text-[10px] text-gray-400">
+            {lastPull
+              ? `Synced ${new Date(lastPull).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`
+              : 'Not synced yet'}
+          </span>
+          <button
+            onClick={handlePullRefresh}
+            disabled={pulling}
+            className="flex items-center gap-1 text-[10px] text-blue-600 active:text-blue-800 disabled:opacity-50"
+          >
+            <RefreshCw size={10} className={pulling ? 'animate-spin' : ''} />
+            {pulling ? 'Syncing…' : 'Refresh'}
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-auto">
@@ -632,6 +675,8 @@ function useBarcodeCamera(onDetected: (barcode: string) => void) {
   return { videoRef, cameraError, startCamera, stopCamera, resumeScanning, shouldScanRef, streamRef }
 }
 
+const DRAFT_KEY = 'milk-manager-order-draft'
+
 function BuildView({ onApproved, onCancel }: BuildViewProps) {
   const [forecasts, setForecasts] = useState<Forecast[]>([])
   const [posMap, setPosMap] = useState<Map<string, ItemPerformance>>(new Map())
@@ -645,6 +690,7 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
   const [showCamera, setShowCamera] = useState(false)
   const [scanToast, setScanToast] = useState<string | null>(null)
   const [highlightProductId, setHighlightProductId] = useState<number | null>(null)
+  const [draftRestored, setDraftRestored] = useState(false)
   const rowRefs = useRef<Map<number, HTMLDivElement>>(new Map())
 
   // Product barcode map for scanner lookup
@@ -732,6 +778,19 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
         for (const f of results) {
           if (!next.has(f.productId)) next.set(f.productId, 0)
         }
+        // Restore draft quantities from localStorage
+        const saved = localStorage.getItem(DRAFT_KEY)
+        if (saved) {
+          try {
+            const draft = JSON.parse(saved) as Record<string, number>
+            let restored = false
+            for (const [id, qty] of Object.entries(draft)) {
+              const numId = Number(id)
+              if (next.has(numId) && qty > 0) { next.set(numId, qty); restored = true }
+            }
+            if (restored) setDraftRestored(true)
+          } catch { /* corrupt draft — ignore */ }
+        }
         return next
       })
     } catch (e) {
@@ -751,6 +810,20 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
 
   useEffect(() => { load() }, [load])
 
+  // Auto-save draft to localStorage on qty changes
+  useEffect(() => {
+    if (loading) return
+    const nonZero: Record<string, number> = {}
+    for (const [id, qty] of qtys) {
+      if (qty > 0) nonZero[String(id)] = qty
+    }
+    if (Object.keys(nonZero).length > 0) {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(nonZero))
+    } else {
+      localStorage.removeItem(DRAFT_KEY)
+    }
+  }, [qtys, loading])
+
   // Stable callback — prevents all ForecastRow memo invalidations on qty change
   const setQty = useCallback((productId: number, qty: number) => {
     setQtys((prev) => new Map(prev).set(productId, qty))
@@ -760,6 +833,22 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
     const next = new Map<number, number>()
     for (const f of forecasts) next.set(f.productId, 0)
     setQtys(next)
+    setDraftRestored(false)
+  }
+
+  function fillSuggested() {
+    setQtys((prev) => {
+      const next = new Map(prev)
+      for (const f of forecasts) {
+        if (f.suggestedQty > 0) next.set(f.productId, f.suggestedQty)
+      }
+      return next
+    })
+  }
+
+  function handleCancel() {
+    // Draft is already auto-saved to localStorage — just navigate back
+    onCancel()
   }
 
   function handleApprove() {
@@ -806,6 +895,7 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
         })),
       )
 
+      localStorage.removeItem(DRAFT_KEY)
       onApproved(orderId)
     } catch (e) {
       setError(friendlyError(e))
@@ -848,13 +938,18 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
     <div className="flex flex-col h-full">
       {/* Toolbar */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-white shrink-0">
-        <button onClick={onCancel} className="p-1.5 -ml-1 text-gray-500" aria-label="Cancel">
+        <button onClick={handleCancel} className="p-2 -ml-1 text-gray-500 active:bg-gray-100 rounded-lg" aria-label="Back">
           <ArrowLeft size={18} />
         </button>
-        <p className="text-xs text-gray-500">{forecasts.length} products · {totalItems} to order <span className="text-gray-300">v2.1</span></p>
-        <div className="flex items-center gap-1.5">
+        <p className="text-xs text-gray-500">{forecasts.length} products · {totalItems} to order</p>
+        <div className="flex items-center gap-1">
+          <button onClick={fillSuggested}
+            className="flex items-center gap-1 text-xs text-blue-600 px-2 py-1.5 rounded-lg border border-blue-200 active:bg-blue-50"
+            title="Fill all suggested quantities">
+            <Sparkles size={12} />Fill
+          </button>
           <button onClick={resetToZero}
-            className="flex items-center gap-1 text-xs text-gray-500 px-2 py-1 rounded border border-gray-200">
+            className="flex items-center gap-1 text-xs text-gray-500 px-2 py-1.5 rounded-lg border border-gray-200 active:bg-gray-50">
             <RotateCcw size={12} />Clear
           </button>
         </div>
@@ -890,18 +985,36 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
 
         {/* Camera overlay */}
         {showCamera && (
-          <div className="relative rounded-lg overflow-hidden bg-black" style={{ height: 180 }}>
+          <div className="relative rounded-xl overflow-hidden bg-black" style={{ height: 200 }}>
             <video ref={cam.videoRef} playsInline muted className="w-full h-full object-cover" />
-            {cam.cameraError && (
-              <div className="absolute inset-0 flex items-center justify-center bg-black/70">
+            {cam.cameraError ? (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80">
                 <p className="text-xs text-red-400 text-center px-4">{cam.cameraError}</p>
+                <button onClick={() => setShowCamera(false)}
+                  className="px-4 py-2 bg-white/20 text-white text-xs font-medium rounded-lg active:bg-white/30">
+                  Close Camera
+                </button>
               </div>
+            ) : (
+              <>
+                {/* Scan guide lines */}
+                <div className="absolute inset-x-8 top-1/2 -translate-y-1/2 pointer-events-none">
+                  <div className="h-16 border-2 border-white/40 rounded-lg" />
+                </div>
+                {/* Status text */}
+                <div className="absolute bottom-2 inset-x-0 text-center">
+                  <span className="text-[11px] text-white/80 bg-black/50 px-3 py-1 rounded-full">
+                    Point camera at barcode
+                  </span>
+                </div>
+              </>
             )}
+            {/* Close button — large touch target */}
             <button onClick={() => setShowCamera(false)}
-              className="absolute top-2 right-2 bg-black/50 text-white rounded-full p-1">
-              <X size={14} />
+              className="absolute top-2 right-2 flex items-center gap-1 bg-black/60 text-white rounded-lg px-3 py-2 active:bg-black/80">
+              <X size={16} />
+              <span className="text-xs font-medium">Close</span>
             </button>
-            <div className="absolute inset-x-4 top-1/2 -translate-y-1/2 h-0.5 bg-red-500/60 rounded" />
           </div>
         )}
       </div>
@@ -910,6 +1023,17 @@ function BuildView({ onApproved, onCancel }: BuildViewProps) {
       {scanToast && (
         <div className="mx-3 mt-2 px-3 py-2 rounded-lg bg-gray-800 text-white text-xs text-center">
           {scanToast}
+        </div>
+      )}
+
+      {/* Draft restored banner */}
+      {draftRestored && (
+        <div className="mx-3 mt-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between">
+          <p className="text-[11px] text-blue-700 font-medium">Draft order restored</p>
+          <button onClick={() => { resetToZero(); setDraftRestored(false) }}
+            className="text-[11px] text-blue-600 font-medium px-2 py-0.5 rounded active:bg-blue-100">
+            Discard
+          </button>
         </div>
       )}
 

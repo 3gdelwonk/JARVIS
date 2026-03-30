@@ -288,6 +288,28 @@ export async function fullSync(): Promise<{ pushed: number; pulled: number }> {
   }
 }
 
+// ── Pull-only helpers ──
+
+export async function syncPullOnly(): Promise<number> {
+  try {
+    return await syncPull()
+  } catch (err) {
+    console.warn('[Sync] pullOnly failed:', (err as Error).message)
+    return 0
+  }
+}
+
+let pullDebounceTimer: ReturnType<typeof setTimeout> | null = null
+
+/** Debounced pull — safe to call on every tab switch or foreground event. */
+export function debouncedPull(delayMs = 2000): void {
+  if (pullDebounceTimer) clearTimeout(pullDebounceTimer)
+  pullDebounceTimer = setTimeout(() => {
+    syncPullOnly()
+    pullDebounceTimer = null
+  }, delayMs)
+}
+
 // ── Auto-sync (debounced push + periodic full sync) ──
 
 let pushTimer: ReturnType<typeof setTimeout> | null = null
@@ -301,12 +323,19 @@ export function schedulePush(delayMs = 500): void {
   }, delayMs)
 }
 
-export function startPeriodicSync(intervalMs = 12 * 60 * 60 * 1000): void {
+export function startPeriodicSync(intervalMs = 30 * 60 * 1000): void {
   if (periodicTimer) return
   periodicTimer = setInterval(() => {
     if (localStorage.getItem(AUTO_SYNC_KEY) === 'false') return
     fullSync().catch(console.warn)
   }, intervalMs)
+
+  // Also sync when app returns to foreground (e.g. iOS home → back to PWA)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && localStorage.getItem(AUTO_SYNC_KEY) !== 'false') {
+      debouncedPull(1000)
+    }
+  })
 }
 
 export function stopPeriodicSync(): void {

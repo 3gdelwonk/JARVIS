@@ -19,6 +19,7 @@ const LS_TOKEN      = 'milk-manager-gmail-token'
 const LS_EXPIRY     = 'milk-manager-gmail-token-expiry'
 const LS_LAST_SYNC  = 'milk-manager-gmail-last-sync'
 const LS_AUTO_SYNC  = 'milk-manager-gmail-auto-sync'
+const LS_EMAIL      = 'milk-manager-gmail-email'
 
 const GMAIL_API     = 'https://www.googleapis.com/gmail/v1/users/me'
 const SCOPE         = 'https://www.googleapis.com/auth/gmail.readonly'
@@ -49,7 +50,7 @@ async function loadGis(): Promise<void> {
 
 type TokenResp = { access_token?: string; expires_in?: number; error?: string }
 
-let cachedClient: { requestAccessToken: () => void } | null = null
+let cachedClient: { requestAccessToken: (overrides?: { prompt?: string; login_hint?: string }) => void } | null = null
 let pendingResolve: ((email: string) => void) | null = null
 let pendingReject: ((err: Error) => void) | null = null
 
@@ -61,7 +62,6 @@ function buildTokenClient(clientId: string) {
   return gis.accounts.oauth2.initTokenClient({
     client_id: clientId,
     scope: SCOPE,
-    prompt: 'select_account',
     callback: async (resp: TokenResp) => {
       if (resp.error || !resp.access_token) {
         pendingReject?.(new Error(resp.error ?? 'OAuth failed'))
@@ -75,6 +75,7 @@ function buildTokenClient(clientId: string) {
         const info = await fetch(`${GMAIL_API}/profile`, {
           headers: { 'Authorization': `Bearer ${resp.access_token}` },
         }).then((r) => r.json()) as { emailAddress?: string }
+        if (info.emailAddress) localStorage.setItem(LS_EMAIL, info.emailAddress)
         pendingResolve?.(info.emailAddress ?? 'connected')
       } catch {
         pendingResolve?.('connected')
@@ -116,11 +117,25 @@ async function getValidToken(): Promise<string> {
   if (!clientId) throw new Error('Gmail Client ID not configured — set it in Settings')
   if (!cachedClient) cachedClient = buildTokenClient(clientId)
   if (!cachedClient) throw new Error('Google Identity Services failed to load')
-  return new Promise<string>((resolve, reject) => {
-    pendingResolve = resolve
-    pendingReject = reject
-    cachedClient!.requestAccessToken()
-  })
+
+  const email = localStorage.getItem(LS_EMAIL)
+  const hint = email ? { login_hint: email } : {}
+
+  // Try silent refresh first (no popup)
+  try {
+    return await new Promise<string>((resolve, reject) => {
+      pendingResolve = resolve
+      pendingReject = reject
+      cachedClient!.requestAccessToken({ prompt: 'none', ...hint })
+    })
+  } catch {
+    // Silent failed — fall back to minimal prompt (no account picker)
+    return new Promise<string>((resolve, reject) => {
+      pendingResolve = resolve
+      pendingReject = reject
+      cachedClient!.requestAccessToken({ prompt: '', ...hint })
+    })
+  }
 }
 
 // ─── Gmail REST helpers ───────────────────────────────────────────────────────
@@ -280,7 +295,7 @@ export function connectGmail(): Promise<string> {
     }
     pendingResolve = resolve
     pendingReject = reject
-    cachedClient.requestAccessToken() // synchronous — preserves user gesture context
+    cachedClient.requestAccessToken({ prompt: 'select_account' })
   })
 }
 
@@ -291,7 +306,9 @@ export function disconnectGmail(): void {
   localStorage.removeItem(LS_LAST_SYNC)
   localStorage.removeItem(LS_CLIENT_ID)
   localStorage.removeItem(LS_AUTO_SYNC)
+  localStorage.removeItem(LS_EMAIL)
 }
 
 export function isGmailConnected(): boolean { return isTokenValid() }
 export function getGmailLastSync(): string | null { return localStorage.getItem(LS_LAST_SYNC) }
+export function getGmailEmail(): string | null { return localStorage.getItem(LS_EMAIL) }
