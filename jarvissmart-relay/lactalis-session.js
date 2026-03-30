@@ -318,24 +318,28 @@ async function _submitOrderPlaywright(products, isRetry = false) {
         throw new Error(`Portal bot detection triggered (${blocked}) — place order manually`);
       }
 
+      // Wait for login form inputs to render (may load via JS)
+      await page.waitForSelector(
+        'input[name="_username"], input[name="username"], input[name="email"]',
+        { timeout: 15000 }
+      ).catch(() => { throw new Error('Login form not found — portal may have changed'); });
+
       // Extract login form data and submit via fetch() to bypass Incapsula form interception
       const loginResult = await page.evaluate(async ({ username, password }) => {
         try {
-          const form = document.querySelector('form');
-          if (!form) return { error: 'Login form not found' };
+          // Find the inputs directly, then locate their parent form
+          const usernameField = document.querySelector('input[name="_username"], input[name="username"], input[name="email"]');
+          const passwordField = document.querySelector('input[name="_password"], input[name="password"]');
+          if (!usernameField || !passwordField) return { error: 'Username/password fields not found on page' };
+
+          const form = usernameField.closest('form');
+          if (!form) return { error: 'No parent form found for login fields' };
 
           // Collect all form fields (including hidden CSRF token)
           const formData = new FormData(form);
-
-          // Set credentials (overwrite any existing values)
-          const usernameField = form.querySelector('input[name="_username"], input[name="username"], input[name="email"]');
-          const passwordField = form.querySelector('input[name="_password"], input[name="password"]');
-          if (!usernameField || !passwordField) return { error: 'Username/password fields not found' };
-
           formData.set(usernameField.name, username);
           formData.set(passwordField.name, password);
 
-          // Get form action URL
           const actionUrl = form.action || '/customer/user/login-check';
           console.log('[Login] Submitting to:', actionUrl, 'fields:', [...formData.keys()].join(', '));
 
@@ -345,22 +349,17 @@ async function _submitOrderPlaywright(products, isRetry = false) {
             redirect: 'follow',
           });
 
-          // Check where we ended up
           const finalUrl = res.url || '';
-          const ok = res.ok;
-          const status = res.status;
 
-          // If we're still on login, it failed
           if (finalUrl.includes('/login')) {
             const html = await res.text();
-            // Try to extract error message
             const doc = new DOMParser().parseFromString(html, 'text/html');
             const errorEl = doc.querySelector('.alert-error, .alert-danger, .message-error, .notification-flash--error');
             const errorMsg = errorEl?.textContent?.trim() || '';
             return { error: `Login failed (still on login page)${errorMsg ? ': ' + errorMsg : ''}`, url: finalUrl };
           }
 
-          return { success: true, url: finalUrl, status };
+          return { success: true, url: finalUrl, status: res.status };
         } catch (err) {
           return { error: err.message || 'Login fetch failed' };
         }
