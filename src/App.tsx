@@ -5,7 +5,7 @@ import { BarChart2, Camera, Compass, LayoutDashboard, ShoppingCart, Package, Set
 import { seedDatabase, backfillBakedImages } from './pwa/lib/db'
 import { applyStatusUpdates, applyExtensionSchedule, fetchCloudSchedule } from './pwa/lib/extensionSync'
 import { syncGmailOrders, isGmailConnected } from './pwa/lib/gmailSync'
-import { fullSync, startPeriodicSync } from './pwa/lib/cloudSync'
+import { fullSync, startPeriodicSync, debouncedPull } from './pwa/lib/cloudSync'
 import { syncPosData } from './pwa/lib/posSync'
 import Dashboard from './pwa/components/Dashboard'
 import OrderBuilder from './pwa/components/OrderBuilder'
@@ -159,6 +159,7 @@ export default function App() {
     setActiveTab(tab)
     localStorage.setItem(LAST_TAB_KEY, tab)
     setShowSettings(false)
+    if (tab === 'order') debouncedPull()
   }
 
   const renderTab = () => {
