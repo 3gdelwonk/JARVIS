@@ -6,11 +6,23 @@
 //
 // Auth handled by server.js apiKeyAuth middleware (JARVIS_API_KEY).
 
+const crypto = require('crypto');
 const express = require('express');
 const lactalis = require('../services/lactalis-session');
 
 module.exports = function (db, broadcast) {
   const router = express.Router();
+
+  // ── Async order jobs ──
+  const orderJobs = new Map(); // jobId → { status, result?, error?, startedAt }
+
+  // Cleanup jobs older than 5 minutes every 60s
+  setInterval(() => {
+    const cutoff = Date.now() - 5 * 60_000;
+    for (const [id, job] of orderJobs) {
+      if (job.startedAt < cutoff) orderJobs.delete(id);
+    }
+  }, 60_000);
 
   // GET /api/lactalis/health — session & system status (no Playwright)
   router.get('/health', (req, res) => {
@@ -72,6 +84,68 @@ module.exports = function (db, broadcast) {
       console.error(`  [Lactalis] ✗ Order failed after ${elapsed}s:`, err.message);
       res.status(502).json({ success: false, error: err.message });
     }
+  });
+
+  // POST /api/lactalis/submit-order-async — returns jobId immediately, poll for result
+  router.post('/submit-order-async', (req, res) => {
+    const { lines } = req.body;
+    if (!Array.isArray(lines) || lines.length === 0) {
+      return res.status(400).json({ success: false, error: 'lines array is required' });
+    }
+    for (const line of lines) {
+      if (!line.itemNumber || typeof line.qty !== 'number' || line.qty < 0) {
+        return res.status(400).json({
+          success: false,
+          error: `Invalid line: ${JSON.stringify(line)} — need itemNumber (string) and qty (number)`,
+        });
+      }
+    }
+
+    const jobId = crypto.randomUUID();
+    const itemCount = lines.length;
+    console.log(`  [Lactalis] ▶ Async order ${jobId.slice(0, 8)} received (${itemCount} lines)`);
+    orderJobs.set(jobId, { status: 'processing', startedAt: Date.now() });
+
+    // Fire and forget — client polls /order-status/:jobId
+    lactalis.submitOrder(lines)
+      .then(result => {
+        const elapsed = ((Date.now() - orderJobs.get(jobId)?.startedAt) / 1000).toFixed(1);
+        console.log(`  [Lactalis] ✓ Async order ${jobId.slice(0, 8)} done (${elapsed}s, success: ${result.success})`);
+        orderJobs.set(jobId, { status: 'done', result, startedAt: orderJobs.get(jobId)?.startedAt || Date.now() });
+        if (typeof broadcast === 'function') {
+          broadcast({
+            type: 'LACTALIS_ORDER_SUBMITTED',
+            items: lines.filter(l => l.qty > 0).length,
+            timestamp: Date.now(),
+          });
+        }
+      })
+      .catch(err => {
+        const elapsed = ((Date.now() - orderJobs.get(jobId)?.startedAt) / 1000).toFixed(1);
+        console.error(`  [Lactalis] ✗ Async order ${jobId.slice(0, 8)} failed (${elapsed}s): ${err.message}`);
+        orderJobs.set(jobId, { status: 'failed', error: err.message, startedAt: orderJobs.get(jobId)?.startedAt || Date.now() });
+      });
+
+    res.json({ jobId });
+  });
+
+  // GET /api/lactalis/order-status/:jobId — poll for async order result
+  router.get('/order-status/:jobId', (req, res) => {
+    const job = orderJobs.get(req.params.jobId);
+    if (!job) return res.status(404).json({ error: 'Job not found or expired' });
+
+    const elapsed = Math.round((Date.now() - job.startedAt) / 1000);
+
+    if (job.status === 'processing') {
+      return res.json({ status: 'processing', elapsed });
+    }
+    if (job.status === 'done') {
+      orderJobs.delete(req.params.jobId);
+      return res.json({ status: 'done', success: true, ...job.result });
+    }
+    // failed
+    orderJobs.delete(req.params.jobId);
+    return res.json({ status: 'failed', success: false, error: job.error, elapsed });
   });
 
   // GET /api/lactalis/delivery-slots — cached, refreshed every 24h

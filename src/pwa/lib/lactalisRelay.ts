@@ -143,10 +143,41 @@ interface OrderLine {
 }
 
 export async function submitOrder(lines: OrderLine[]): Promise<SubmitResult> {
-  return relayFetch<SubmitResult>('/api/lactalis/submit-order', {
+  // Step 1: Start the job (short request — returns immediately with jobId)
+  const { jobId } = await relayFetch<{ jobId: string }>('/api/lactalis/submit-order-async', {
     method: 'POST',
     body: JSON.stringify({ lines }),
+    timeoutMs: 15_000,
   })
+
+  // Step 2: Poll for result with short requests that won't trigger Safari's timeout
+  const POLL_INTERVAL = 3_000
+  const MAX_WAIT = 120_000
+  const start = Date.now()
+
+  while (Date.now() - start < MAX_WAIT) {
+    await new Promise(r => setTimeout(r, POLL_INTERVAL))
+
+    let status: any
+    try {
+      status = await relayFetch<any>(`/api/lactalis/order-status/${jobId}`, {
+        timeoutMs: 10_000,
+      })
+    } catch {
+      // Network blip during poll — retry next iteration
+      continue
+    }
+
+    if (status.status === 'done') {
+      return { success: true, redirectUrl: status.redirectUrl }
+    }
+    if (status.status === 'failed') {
+      return { success: false, error: status.error }
+    }
+    // status === 'processing' → keep polling
+  }
+
+  throw new Error('Order submission timed out after 2 minutes — check JARVISmart logs')
 }
 
 // ── Delivery slots ──
