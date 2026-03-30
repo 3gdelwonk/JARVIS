@@ -406,7 +406,40 @@ async function _submitOrderPlaywright(products, isRetry = false) {
             const json = JSON.parse(text);
             return { success: true, redirectUrl: json.redirectUrl || json.url || null };
           } catch {
-            return { success: true };
+            // HTML response (not JSON) — NOT success.
+            // Success = 302 redirect. A 200 with HTML = form re-rendered with errors.
+            try {
+              const doc = new DOMParser().parseFromString(text, 'text/html');
+              const selectors = [
+                '.alert-error', '.alert-danger',
+                '.flash-messages-holder .alert',
+                '.notification-flash--error',
+                '.validation-failed', '.form-error-message',
+                '[data-role="flash-message"]', '.message-error',
+              ];
+              const msgs = [];
+              for (const sel of selectors) {
+                doc.querySelectorAll(sel).forEach(el => {
+                  const t = el.textContent?.trim();
+                  if (t && t.length > 0 && t.length < 500) msgs.push(t);
+                });
+              }
+              if (msgs.length > 0) {
+                return { success: false, error: 'Lactalis rejected the order: ' + msgs.join(' | '), htmlLength: text.length };
+              }
+              // No known error selectors matched — return page context
+              const title = doc.querySelector('title')?.textContent?.trim() || '';
+              const h1 = doc.querySelector('h1')?.textContent?.trim() || '';
+              const snippet = doc.body?.textContent?.trim().slice(0, 300) || '';
+              return {
+                success: false,
+                error: `Lactalis returned an unexpected page: "${title}" ${h1 ? '— ' + h1 : ''} — ${snippet}`,
+                htmlLength: text.length,
+                htmlSnippet: text.slice(0, 2000),
+              };
+            } catch {
+              return { success: false, error: 'Lactalis returned non-JSON HTML (' + text.length + ' bytes): ' + text.slice(0, 300) };
+            }
           }
         }
 
@@ -422,6 +455,10 @@ async function _submitOrderPlaywright(products, isRetry = false) {
     }, { products, csrfToken, portalUrl: PORTAL_URL });
 
     if (!result.success) {
+      console.error(`  [Lactalis] Order rejected: ${result.error}`);
+      if (result.htmlSnippet) {
+        console.error(`  [Lactalis] HTML snippet:\n${result.htmlSnippet}`);
+      }
       // Do NOT retry on order errors (avoid double-submission)
       throw new Error(result.error || 'Order submission failed');
     }

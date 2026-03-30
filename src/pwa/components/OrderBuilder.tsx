@@ -367,16 +367,8 @@ function OrderDetailView({ orderId, onBack }: OrderDetailProps) {
       }
     } catch (err: any) {
       setRelayStatus('error')
-      const msg: string = err.message || ''
-      // Safari says "Load failed", Chrome says "Failed to fetch" for network errors
-      if (/load failed|failed to fetch|networkerror|abort/i.test(msg)) {
-        setRelayError(
-          'Connection to JARVISmart lost — the server may have dropped during the Playwright submission. ' +
-          'Keep this screen active while submitting (don\'t lock or switch apps). Check that JARVISmart is running.'
-        )
-      } else {
-        setRelayError(msg)
-      }
+      const msg: string = err.message || 'Unknown error'
+      setRelayError(msg)
     } finally {
       wakeLock?.release().catch(() => {})
     }
