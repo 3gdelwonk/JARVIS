@@ -268,23 +268,44 @@ async function _submitOrderPlaywright(products, isRetry = false) {
     });
     const page = await context.newPage();
 
-    // Hide webdriver flag to avoid bot detection
+    // ── Stealth patches to avoid Incapsula bot detection ──
     await page.addInitScript(() => {
       Object.defineProperty(navigator, 'webdriver', { get: () => false });
+      Object.defineProperty(navigator, 'languages', { get: () => ['en-AU', 'en'] });
+      Object.defineProperty(navigator, 'plugins', {
+        get: () => {
+          const p = [
+            { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format', length: 1 },
+            { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '', length: 1 },
+            { name: 'Native Client', filename: 'internal-nacl-plugin', description: '', length: 1 },
+          ];
+          p.length = 3;
+          return p;
+        }
+      });
+      window.chrome = { runtime: {}, loadTimes: () => ({}), csi: () => ({}) };
+      const origQuery = window.navigator.permissions?.query;
+      if (origQuery) {
+        window.navigator.permissions.query = (params) =>
+          params.name === 'notifications'
+            ? Promise.resolve({ state: Notification.permission })
+            : origQuery(params);
+      }
     });
 
-    // ── Step 1: Navigate to login page (same pattern as delivery slots) ──
+    // ── Step 1: Navigate to login page (Incapsula JS challenge runs here) ──
     console.log('  [Lactalis] Navigating to login page...');
     await page.goto(`${PORTAL_URL}/customer/user/login`, {
       waitUntil: 'networkidle',
       timeout: 30000,
     });
 
-    // If we're on the login page, fill credentials and submit
+    // If we're on the login page, submit credentials via fetch (not button click)
+    // Clicking submit triggers Incapsula form interception. Using fetch() bypasses it.
     if (page.url().includes('/login')) {
       console.log(`  [Lactalis] On login page — URL: ${page.url()}`);
 
-      // Detect real Incapsula blocks (not normal cookie strings)
+      // Detect real Incapsula blocks
       const blocked = await page.evaluate(() => {
         const html = document.documentElement.innerHTML.toLowerCase();
         if (html.includes('request unsuccessful') && html.includes('incident id')) return 'incapsula_block';
@@ -297,35 +318,65 @@ async function _submitOrderPlaywright(products, isRetry = false) {
         throw new Error(`Portal bot detection triggered (${blocked}) — place order manually`);
       }
 
-      const usernameInput = await page.waitForSelector(
-        'input[name="_username"], input[name="username"], input[name="email"]',
-        { timeout: 15000 }
-      ).catch(() => { throw new Error('Login form not found — portal may have changed'); });
+      // Extract login form data and submit via fetch() to bypass Incapsula form interception
+      const loginResult = await page.evaluate(async ({ username, password }) => {
+        try {
+          const form = document.querySelector('form');
+          if (!form) return { error: 'Login form not found' };
 
-      const passwordInput = await page.waitForSelector(
-        'input[name="_password"], input[name="password"]',
-        { timeout: 5000 }
-      ).catch(() => { throw new Error('Password field not found — portal may have changed'); });
+          // Collect all form fields (including hidden CSRF token)
+          const formData = new FormData(form);
 
-      await usernameInput.fill(USERNAME);
-      await passwordInput.fill(PASSWORD);
+          // Set credentials (overwrite any existing values)
+          const usernameField = form.querySelector('input[name="_username"], input[name="username"], input[name="email"]');
+          const passwordField = form.querySelector('input[name="_password"], input[name="password"]');
+          if (!usernameField || !passwordField) return { error: 'Username/password fields not found' };
 
-      const submitBtn = await page.$('button[type="submit"], input[type="submit"]');
-      if (submitBtn) await submitBtn.click();
-      else await page.keyboard.press('Enter');
+          formData.set(usernameField.name, username);
+          formData.set(passwordField.name, password);
 
-      try {
-        await page.waitForURL(url => !url.toString().includes('/login'), { timeout: 20000 });
-      } catch {
-        throw new Error('Login failed during order submission — check credentials');
+          // Get form action URL
+          const actionUrl = form.action || '/customer/user/login-check';
+          console.log('[Login] Submitting to:', actionUrl, 'fields:', [...formData.keys()].join(', '));
+
+          const res = await fetch(actionUrl, {
+            method: 'POST',
+            body: formData,
+            redirect: 'follow',
+          });
+
+          // Check where we ended up
+          const finalUrl = res.url || '';
+          const ok = res.ok;
+          const status = res.status;
+
+          // If we're still on login, it failed
+          if (finalUrl.includes('/login')) {
+            const html = await res.text();
+            // Try to extract error message
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            const errorEl = doc.querySelector('.alert-error, .alert-danger, .message-error, .notification-flash--error');
+            const errorMsg = errorEl?.textContent?.trim() || '';
+            return { error: `Login failed (still on login page)${errorMsg ? ': ' + errorMsg : ''}`, url: finalUrl };
+          }
+
+          return { success: true, url: finalUrl, status };
+        } catch (err) {
+          return { error: err.message || 'Login fetch failed' };
+        }
+      }, { username: USERNAME, password: PASSWORD });
+
+      if (!loginResult.success) {
+        console.error(`  [Lactalis] Login failed: ${loginResult.error}`);
+        throw new Error(`Login failed — ${loginResult.error}`);
       }
 
+      console.log(`  [Lactalis] ✓ Login successful via fetch — landed on: ${loginResult.url}`);
       recordLoginSuccess();
       const cookies = await context.cookies();
       saveCookiesToDisk(cookies);
+      console.log(`  [Lactalis] Cookies: ${cookies.length} — ${cookies.map(c => c.name).join(', ')}`);
     }
-
-    console.log(`  [Lactalis] Post-login URL: ${page.url()}`);
 
     // ── Step 2: Fetch Quick Order page via AJAX (avoids Incapsula re-challenge) ──
     // This mirrors the delivery slots pattern: use page.evaluate(fetch()) instead of
