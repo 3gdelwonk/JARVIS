@@ -13,7 +13,8 @@ import type { ScrapedOrder } from './types'
 
 // ─── Regex patterns ───────────────────────────────────────────────────────────
 
-const ORDER_NUMBER  = /order\s+#(\d+)/i
+const ORDER_NUMBER  = /order\s*(?:number|confirmation|no\.?)?\s*[#:]\s*(\d+)/i
+const ORDER_NUM_FALLBACK = /\b(\d{6,})\b/  // fallback: first 6+ digit number
 const ORDER_DATE    = /Order Date:\s*(\d{1,2})\/(\d{1,2})\/(\d{4})/i
 const DELIVERY_DATE = /Delivery Date:\s*(\d{1,2})\/(\d{1,2})\/(\d{4})/i
 const TOTAL_LINE    = /\bTotal\s+\$([0-9,]+\.\d{2})/
@@ -39,8 +40,8 @@ function extractFromHtml(html: string): ScrapedOrder | null {
 
   const text = doc.body.textContent ?? ''
 
-  // Extract order number
-  const numMatch = text.match(ORDER_NUMBER)
+  // Extract order number — try specific pattern first, then fallback to any large number
+  const numMatch = text.match(ORDER_NUMBER) || text.match(ORDER_NUM_FALLBACK)
   if (!numMatch) return null
   const orderNumber = numMatch[1]
 
@@ -64,27 +65,34 @@ function extractFromHtml(html: string): ScrapedOrder | null {
     const rows = Array.from(table.querySelectorAll('tr'))
     if (rows.length < 2) continue
 
-    // Check if this table has a header row with "Item" and at least one of Qty/Quantity/Price
+    // Check if this table has a header row with product/item/sku keywords
     const headerText = (rows[0].textContent ?? '').toLowerCase()
-    if (!headerText.includes('item')) continue
+    if (!headerText.includes('item') && !headerText.includes('product') && !headerText.includes('sku') && !headerText.includes('description')) continue
 
     const parsed: ScrapedOrder['lineItems'] = []
 
     for (let i = 1; i < rows.length; i++) {
       const cells = Array.from(rows[i].querySelectorAll('td'))
-      if (cells.length < 4) continue
+      if (cells.length < 3) continue
 
       const col0 = cells[0].textContent?.trim() ?? ''
       if (!col0 || SUMMARY_ROWS.test(col0)) continue
 
-      // Split "Product Name SKU #: 12345" on "SKU"
+      // Try to split "Product Name SKU #: 12345" on "SKU"
+      let productName = ''
+      let itemNumber = ''
       const skuIdx = col0.toLowerCase().indexOf('sku')
-      if (skuIdx === -1) continue
-
-      const productName = col0.slice(0, skuIdx).replace(/\s+#:\s*$/, '').trim()
-      const skuPart = col0.slice(skuIdx)
-      const skuMatch = skuPart.match(/SKU\s*#:\s*(\d+)/i)
-      const itemNumber = skuMatch?.[1] ?? ''
+      if (skuIdx !== -1) {
+        productName = col0.slice(0, skuIdx).replace(/\s+#:\s*$/, '').trim()
+        const skuPart = col0.slice(skuIdx)
+        const skuMatch = skuPart.match(/SKU\s*#?:?\s*(\d+)/i)
+        itemNumber = skuMatch?.[1] ?? ''
+      } else {
+        // No SKU in first column — use full text as product name, look for number
+        productName = col0.replace(/\s*#?\d{4,}\s*$/, '').trim()
+        const numInCol = col0.match(/(\d{4,})/)
+        itemNumber = numInCol?.[1] ?? ''
+      }
 
       const qtyText = cells[1].textContent?.trim() ?? ''
       const qty = parseInt(qtyText) || 0
@@ -92,8 +100,9 @@ function extractFromHtml(html: string): ScrapedOrder | null {
       const priceText = cells[2].textContent?.replace('$', '').trim() ?? ''
       const price = parseAmount(priceText)
 
-      const totalText = cells[3].textContent?.replace('$', '').trim() ?? ''
-      const lineTotal = parseAmount(totalText)
+      const lineTotal = cells.length >= 4
+        ? parseAmount(cells[3].textContent?.replace('$', '').trim() ?? '')
+        : qty * price
 
       if (!productName || qty === 0) continue
 
@@ -123,7 +132,7 @@ function extractFromHtml(html: string): ScrapedOrder | null {
 // ─── Plain text fallback ──────────────────────────────────────────────────────
 
 function extractFromText(text: string): ScrapedOrder | null {
-  const numMatch = text.match(ORDER_NUMBER)
+  const numMatch = text.match(ORDER_NUMBER) || text.match(ORDER_NUM_FALLBACK)
   if (!numMatch) return null
   const orderNumber = numMatch[1]
 
