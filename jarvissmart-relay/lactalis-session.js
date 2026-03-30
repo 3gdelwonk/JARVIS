@@ -268,24 +268,28 @@ async function _submitOrderPlaywright(products, isRetry = false) {
     });
     const page = await context.newPage();
 
-    // ── Step 1: Login ──
+    // Hide webdriver flag to avoid bot detection
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => false });
+    });
+
+    // ── Step 1: Navigate to login page (same pattern as delivery slots) ──
+    console.log('  [Lactalis] Navigating to login page...');
     await page.goto(`${PORTAL_URL}/customer/user/login`, {
       waitUntil: 'networkidle',
       timeout: 30000,
     });
 
-    // Check if already logged in (redirected away from login)
-    const currentUrl = page.url();
-    if (currentUrl.includes('/login')) {
-      // Detect Incapsula/bot protection — check multiple signals
+    // If we're on the login page, fill credentials and submit
+    if (page.url().includes('/login')) {
+      console.log(`  [Lactalis] On login page — URL: ${page.url()}`);
+
+      // Detect real Incapsula blocks (not normal cookie strings)
       const blocked = await page.evaluate(() => {
         const html = document.documentElement.innerHTML.toLowerCase();
-        // Incapsula block page markers
-        if (html.includes('_incapsula') || html.includes('incap_ses') || html.includes('visid_incap')) return 'incapsula_cookie';
-        if (html.includes('request unsuccessful') || html.includes('incident id')) return 'incapsula_block';
+        if (html.includes('request unsuccessful') && html.includes('incident id')) return 'incapsula_block';
         if (document.querySelector('iframe[src*="_Incapsula"], iframe[src*="captcha"]')) return 'incapsula_iframe';
         if (document.querySelector('#recaptcha, .g-recaptcha, [class*="captcha"]')) return 'captcha';
-        // JS challenge — page has almost no real content
         if (!document.querySelector('form') && html.length < 5000) return 'js_challenge';
         return null;
       });
@@ -317,55 +321,65 @@ async function _submitOrderPlaywright(products, isRetry = false) {
       }
 
       recordLoginSuccess();
-      // Save cookies for health endpoint reporting
       const cookies = await context.cookies();
       saveCookiesToDisk(cookies);
     }
 
-    console.log('  [Lactalis] Logged in — navigating to Quick Order...');
+    console.log(`  [Lactalis] Post-login URL: ${page.url()}`);
 
-    // ── Step 2: Navigate to Quick Order page ──
-    await page.goto(`${PORTAL_URL}/customer/product/quick-add/`, {
-      waitUntil: 'networkidle',
-      timeout: 30000,
-    });
+    // ── Step 2: Fetch Quick Order page via AJAX (avoids Incapsula re-challenge) ──
+    // This mirrors the delivery slots pattern: use page.evaluate(fetch()) instead of
+    // page.goto() — the browser sends cookies automatically, Incapsula doesn't re-challenge.
+    const csrfResult = await page.evaluate(async (portalUrl) => {
+      try {
+        const res = await fetch(`${portalUrl}/customer/product/quick-add/`, {
+          headers: { 'Accept': 'text/html', 'X-Requested-With': 'XMLHttpRequest' },
+        });
 
-    // Check we're not redirected back to login
-    if (page.url().includes('/login')) {
-      if (!isRetry) {
-        console.log('  [Lactalis] Redirected to login during order — retrying with fresh session...');
-        await browser.close();
-        return _submitOrderPlaywright(products, true);
+        // Check if redirected to login (session not authenticated)
+        if (res.url && res.url.includes('/login')) {
+          return { error: 'Session lost — Quick Order fetch redirected to login', redirectedTo: res.url };
+        }
+
+        if (!res.ok) {
+          return { error: `Quick Order returned HTTP ${res.status}` };
+        }
+
+        const html = await res.text();
+
+        // Check for Incapsula block page
+        const lower = html.toLowerCase();
+        if (lower.includes('request unsuccessful') && lower.includes('incident id')) {
+          return { error: 'Quick Order blocked by Incapsula — place order manually' };
+        }
+
+        // Parse HTML and extract CSRF token
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const input = doc.querySelector('input[name="oro_product_quick_add[_token]"]');
+        if (!input) {
+          const title = doc.querySelector('title')?.textContent?.trim() || '(no title)';
+          return { error: `CSRF token not found (page: "${title}")`, htmlSnippet: html.slice(0, 1000) };
+        }
+
+        return { token: input.value };
+      } catch (err) {
+        return { error: err.message || 'Quick Order fetch failed' };
       }
-      throw new Error('Session lost during order — redirected to login after retry');
+    }, PORTAL_URL);
+
+    if (csrfResult.error) {
+      console.error(`  [Lactalis] Quick Order fetch failed: ${csrfResult.error}`);
+      if (csrfResult.redirectedTo) {
+        console.error(`  [Lactalis] Redirected to: ${csrfResult.redirectedTo}`);
+      }
+      if (csrfResult.htmlSnippet) {
+        console.error(`  [Lactalis] HTML snippet:\n${csrfResult.htmlSnippet}`);
+      }
+      throw new Error(csrfResult.error);
     }
 
-    // Check if quick-add page is actually an Incapsula block
-    const quickAddBlocked = await page.evaluate(() => {
-      const html = document.documentElement.innerHTML.toLowerCase();
-      if (html.includes('_incapsula') || html.includes('request unsuccessful') || html.includes('incident id')) return true;
-      if (!document.querySelector('form') && html.length < 5000) return true;
-      return false;
-    });
-    if (quickAddBlocked) {
-      throw new Error('Quick Order page blocked by Incapsula — place order manually');
-    }
-
-    // ── Step 3: Extract CSRF token from page DOM ──
-    const csrfToken = await page.evaluate(() => {
-      const input = document.querySelector('input[name="oro_product_quick_add[_token]"]');
-      return input ? input.value : null;
-    });
-
-    if (!csrfToken) {
-      // Capture what we actually got for debugging
-      const pageTitle = await page.title().catch(() => '(unknown)');
-      const pageUrl = page.url();
-      console.error(`  [Lactalis] CSRF missing — page title: "${pageTitle}", URL: ${pageUrl}`);
-      throw new Error(`CSRF token not found on Quick Order page (got: "${pageTitle}" at ${pageUrl})`);
-    }
-
-    console.log('  [Lactalis] CSRF token extracted — submitting order...');
+    const csrfToken = csrfResult.token;
+    console.log('  [Lactalis] ✓ CSRF token extracted via AJAX — submitting order...');
 
     // ── Step 4: Submit order via fetch within browser context (with 30s timeout) ──
     const result = await page.evaluate(async ({ products, csrfToken, portalUrl }) => {
