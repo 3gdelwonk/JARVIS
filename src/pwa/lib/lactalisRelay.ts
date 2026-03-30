@@ -61,7 +61,7 @@ async function relayFetch<T>(path: string, options?: RequestInit & { timeoutMs?:
     }
     // Safari says "Load failed", Chrome says "Failed to fetch"
     if (/load failed|failed to fetch|networkerror/i.test(err.message || '')) {
-      throw new Error('Cannot reach JARVISmart — check that the server is running and the URL is correct')
+      throw new Error(`Cannot reach JARVISmart (${err.message}) — check that the server is running and the URL is correct`)
     }
     throw err
   } finally {
