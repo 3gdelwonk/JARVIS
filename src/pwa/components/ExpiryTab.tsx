@@ -325,6 +325,30 @@ function CheckInView({ orderId, onBack }: CheckInViewProps) {
         if (ol?.id) await db.orderLines.update(ol.id, { deliveredQty: l.deliveredQty })
       }
 
+      // Create stock snapshots — increase QOH by delivered quantity
+      const batchId = `delivery_${orderId}_${today}`
+      for (const l of lines) {
+        if (l.deliveredQty <= 0) continue
+        const product = await db.products.get(l.productId)
+        if (!product) continue
+        // Get latest QOH for this product
+        const snaps = await db.stockSnapshots
+          .where('productId').equals(l.productId)
+          .toArray()
+        const latestSnap = snaps.sort(
+          (a, b) => new Date(b.importedAt).getTime() - new Date(a.importedAt).getTime()
+        )[0]
+        const prevQoh = latestSnap?.qoh ?? 0
+        await db.stockSnapshots.add({
+          productId: l.productId,
+          barcode: product.barcode,
+          qoh: prevQoh + l.deliveredQty,
+          importedAt: new Date(),
+          source: 'item_stock_report' as const,
+          importBatchId: batchId,
+        })
+      }
+
       // Mark order as delivered
       await db.orders.update(orderId, { status: 'delivered' })
 
