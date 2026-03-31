@@ -75,33 +75,88 @@ function downloadWasteCsv(entries: import('../lib/types').WasteEntry[]) {
   downloadFile(buildWasteCsv(entries), `waste-report-${new Date().toISOString().split('T')[0]}.csv`)
 }
 
-// ─── Top seller row ──────────────────────────────────────────────────────────
+// ─── Top seller row + detail ─────────────────────────────────────────────────
 
 interface TopSeller {
   productId: number
   productName: string
   totalQty: number
   totalRevenue: number
+  prevWeekQty: number
+  prevWeekRevenue: number
+  dailyBreakdown: { date: string; qty: number; revenue: number }[]
 }
 
-function TopSellerRow({ rank, s, imageUrl }: { rank: number; s: TopSeller; imageUrl?: string }) {
+function TopSellerRow({ rank, s, imageUrl, expanded, onToggle }: {
+  rank: number; s: TopSeller; imageUrl?: string; expanded: boolean; onToggle: () => void
+}) {
+  const qtyChange = s.prevWeekQty > 0
+    ? Math.round(((s.totalQty - s.prevWeekQty) / s.prevWeekQty) * 100)
+    : null
+
   return (
-    <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-100 last:border-0">
-      <span className="text-xs font-bold text-gray-300 w-5 text-center shrink-0">{rank}</span>
-      <div className="relative w-8 h-8 rounded-md overflow-hidden bg-gray-100 shrink-0 flex items-center justify-center">
-        <ImageOff size={12} className="text-gray-300" />
-        {imageUrl && (
-          <img src={imageUrl} alt="" className="absolute inset-0 w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
-        )}
-      </div>
-      <div className="flex-1 min-w-0">
-        <p className="text-sm text-gray-800 truncate">{s.productName}</p>
-        <p className="text-[11px] text-gray-400">${s.totalRevenue.toFixed(2)} revenue</p>
-      </div>
-      <div className="text-right shrink-0">
-        <p className="text-sm font-semibold text-gray-800">{s.totalQty}</p>
-        <p className="text-[11px] text-gray-400">sold</p>
-      </div>
+    <div className="border-b border-gray-100 last:border-0">
+      <button onClick={onToggle} className="w-full flex items-center gap-2 px-3 py-2 active:bg-gray-50">
+        <span className="text-xs font-bold text-gray-300 w-5 text-center shrink-0">{rank}</span>
+        <div className="relative w-8 h-8 rounded-md overflow-hidden bg-gray-100 shrink-0 flex items-center justify-center">
+          <ImageOff size={12} className="text-gray-300" />
+          {imageUrl && (
+            <img src={imageUrl} alt="" className="absolute inset-0 w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+          )}
+        </div>
+        <div className="flex-1 min-w-0 text-left">
+          <p className="text-sm text-gray-800 truncate">{s.productName}</p>
+          <p className="text-[11px] text-gray-400">${s.totalRevenue.toFixed(2)} revenue</p>
+        </div>
+        <div className="text-right shrink-0">
+          <p className="text-sm font-semibold text-gray-800">{Math.round(s.totalQty)}</p>
+          <p className="text-[11px] text-gray-400">sold</p>
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="px-3 pb-3 pt-1 bg-gray-50 space-y-2">
+          {/* Week comparison */}
+          <div className="flex gap-2">
+            <div className="flex-1 bg-white rounded-lg p-2 border border-gray-100">
+              <p className="text-[10px] text-gray-400 uppercase">This Week</p>
+              <p className="text-sm font-semibold text-gray-900">{Math.round(s.totalQty)} units</p>
+              <p className="text-[11px] text-gray-500">${s.totalRevenue.toFixed(2)}</p>
+            </div>
+            <div className="flex-1 bg-white rounded-lg p-2 border border-gray-100">
+              <p className="text-[10px] text-gray-400 uppercase">Last Week</p>
+              <p className="text-sm font-semibold text-gray-900">{Math.round(s.prevWeekQty)} units</p>
+              <p className="text-[11px] text-gray-500">${s.prevWeekRevenue.toFixed(2)}</p>
+            </div>
+            {qtyChange !== null && (
+              <div className="flex items-center shrink-0">
+                <span className={`text-xs font-semibold px-2 py-1 rounded-full ${
+                  qtyChange > 0 ? 'bg-green-100 text-green-700' :
+                  qtyChange < 0 ? 'bg-red-100 text-red-700' :
+                  'bg-gray-100 text-gray-600'
+                }`}>
+                  {qtyChange > 0 ? '+' : ''}{qtyChange}%
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Daily breakdown */}
+          {s.dailyBreakdown.length > 0 && (
+            <div className="bg-white rounded-lg border border-gray-100 overflow-hidden">
+              <p className="text-[10px] text-gray-400 uppercase px-2 pt-1.5">Daily Breakdown</p>
+              {s.dailyBreakdown.map((d) => (
+                <div key={d.date} className="flex items-center justify-between px-2 py-1 text-xs">
+                  <span className="text-gray-600">
+                    {new Date(d.date + 'T00:00:00').toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' })}
+                  </span>
+                  <span className="text-gray-800 font-medium">{Math.round(d.qty)} units · ${d.revenue.toFixed(2)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -138,6 +193,7 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
   const [extStatus, setExtStatus] = useState<{ connected: boolean; lactalisLoggedIn: boolean } | null>(null)
   const [refreshingSchedule, setRefreshingSchedule] = useState(false)
   const [showWasteEditModal, setShowWasteEditModal] = useState(false)
+  const [expandedSeller, setExpandedSeller] = useState<number | null>(null)
   // Live queries
   const recentOrders = useLiveQuery(
     () => db.orders.toArray().then(all =>
@@ -181,44 +237,81 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
     [],
   )
 
-  // Async: top sellers from sales data (past 7 days)
+  // Async: top sellers from sales data (past 7 days vs previous 7 days)
   useEffect(() => {
     let cancelled = false
     setLoadingSales(true)
 
     async function loadTopSellers() {
       try {
-        const cutoff = new Date()
-        cutoff.setDate(cutoff.getDate() - 7)
-        const cutoffStr = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, '0')}-${String(cutoff.getDate()).padStart(2, '0')}`
+        const now = new Date()
+        const thisWeekStart = new Date(now)
+        thisWeekStart.setDate(thisWeekStart.getDate() - 7)
+        const prevWeekStart = new Date(now)
+        prevWeekStart.setDate(prevWeekStart.getDate() - 14)
+        const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+        const thisWeekStr = fmt(thisWeekStart)
+        const prevWeekStr = fmt(prevWeekStart)
 
         const allSales = await db.salesRecords.toArray()
-        const recent = allSales.filter((s) => s.date >= cutoffStr)
+        const thisWeek = allSales.filter((s) => s.date >= thisWeekStr)
+        const prevWeek = allSales.filter((s) => s.date >= prevWeekStr && s.date < thisWeekStr)
 
-        // Aggregate by productId
-        const map = new Map<number, { productName: string; totalQty: number; totalRevenue: number }>()
         const products = await db.products.toArray()
         const productMap = new Map(products.map((p) => [p.id!, p]))
 
-        for (const s of recent) {
+        // This week aggregation
+        const map = new Map<number, {
+          productName: string; totalQty: number; totalRevenue: number
+          prevWeekQty: number; prevWeekRevenue: number
+          dailyMap: Map<string, { qty: number; revenue: number }>
+        }>()
+
+        for (const s of thisWeek) {
           const pid = s.productId
           if (!pid) continue
           const existing = map.get(pid)
           if (existing) {
             existing.totalQty += s.qtySold
             existing.totalRevenue += s.salesValue
+            const day = existing.dailyMap.get(s.date)
+            if (day) { day.qty += s.qtySold; day.revenue += s.salesValue }
+            else existing.dailyMap.set(s.date, { qty: s.qtySold, revenue: s.salesValue })
           } else {
             const prod = productMap.get(pid)
+            const dailyMap = new Map<string, { qty: number; revenue: number }>()
+            dailyMap.set(s.date, { qty: s.qtySold, revenue: s.salesValue })
             map.set(pid, {
               productName: prod?.name ?? s.barcode,
-              totalQty: s.qtySold,
-              totalRevenue: s.salesValue,
+              totalQty: s.qtySold, totalRevenue: s.salesValue,
+              prevWeekQty: 0, prevWeekRevenue: 0, dailyMap,
             })
           }
         }
 
-        const sorted = Array.from(map.entries())
-          .map(([productId, data]) => ({ productId, ...data }))
+        // Previous week aggregation
+        for (const s of prevWeek) {
+          const pid = s.productId
+          if (!pid) continue
+          const existing = map.get(pid)
+          if (existing) {
+            existing.prevWeekQty += s.qtySold
+            existing.prevWeekRevenue += s.salesValue
+          }
+        }
+
+        const sorted: TopSeller[] = Array.from(map.entries())
+          .map(([productId, data]) => ({
+            productId,
+            productName: data.productName,
+            totalQty: data.totalQty,
+            totalRevenue: data.totalRevenue,
+            prevWeekQty: data.prevWeekQty,
+            prevWeekRevenue: data.prevWeekRevenue,
+            dailyBreakdown: Array.from(data.dailyMap.entries())
+              .map(([date, d]) => ({ date, qty: d.qty, revenue: d.revenue }))
+              .sort((a, b) => a.date.localeCompare(b.date)),
+          }))
           .sort((a, b) => b.totalQty - a.totalQty)
           .slice(0, 10)
 
@@ -446,7 +539,14 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
             </div>
           ) : (
             topSellers.map((s, i) => (
-              <TopSellerRow key={s.productId} rank={i + 1} s={s} imageUrl={productImageMap?.get(s.productId)} />
+              <TopSellerRow
+                key={s.productId}
+                rank={i + 1}
+                s={s}
+                imageUrl={productImageMap?.get(s.productId)}
+                expanded={expandedSeller === s.productId}
+                onToggle={() => setExpandedSeller(expandedSeller === s.productId ? null : s.productId)}
+              />
             ))
           )}
         </div>

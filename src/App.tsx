@@ -1,7 +1,7 @@
 /// <reference types="vite-plugin-pwa/react" />
 import { Component, useEffect, useState, type ReactNode } from 'react'
 import { useRegisterSW } from 'virtual:pwa-register/react'
-import { BarChart2, Camera, Compass, LayoutDashboard, ShoppingCart, Package, Settings, Sparkles, Upload } from 'lucide-react'
+import { Camera, LayoutDashboard, ShoppingCart, Package, Settings, Sparkles, Upload } from 'lucide-react'
 import { seedDatabase, backfillBakedImages } from './pwa/lib/db'
 import { applyStatusUpdates, applyExtensionSchedule, fetchCloudSchedule } from './pwa/lib/extensionSync'
 import { syncGmailOrders, isGmailConnected } from './pwa/lib/gmailSync'
@@ -15,8 +15,7 @@ import ProductList from './pwa/components/ProductList'
 import InsightsTab from './pwa/components/InsightsTab'
 import ScannerTab from './pwa/components/ScannerTab'
 import SettingsSheet from './pwa/components/SettingsSheet'
-import StockPerformanceTab from './pwa/components/StockPerformanceTab'
-import ProductScoutTab from './pwa/components/ProductScoutTab'
+// StockPerformanceTab and ProductScoutTab merged into InsightsTab
 
 const LAST_TAB_KEY = 'milk-manager-last-tab'
 
@@ -85,15 +84,13 @@ class ErrorBoundary extends Component<
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-type Tab = 'dashboard' | 'order' | 'scanner' | 'products' | 'performance' | 'scout' | 'insights' | 'import' | 'margins'
+type Tab = 'dashboard' | 'order' | 'scanner' | 'products' | 'insights' | 'import' | 'margins'
 
 const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'dashboard',   label: 'Home',    icon: <LayoutDashboard size={18} /> },
   { id: 'order',       label: 'Order',   icon: <ShoppingCart size={18} /> },
   { id: 'scanner',     label: 'Scanner', icon: <Camera size={18} /> },
   { id: 'products',    label: 'Products',icon: <Package size={18} /> },
-  { id: 'performance', label: 'Perform', icon: <BarChart2 size={18} /> },
-  { id: 'scout',       label: 'Scout',   icon: <Compass size={18} /> },
   { id: 'insights',    label: 'Insights',icon: <Sparkles size={18} /> },
 ]
 
@@ -102,9 +99,7 @@ const TAB_TITLES: Record<Tab, string> = {
   order:       'Order Builder',
   scanner:     'Scanner',
   products:    'Products',
-  performance: 'Stock Performance',
-  scout:       'Product Scout',
-  insights:    'AI Insights',
+  insights:    'Intelligence',
   import:      'Import Data',
   margins:     'Margin Analysis',
 }
@@ -171,8 +166,6 @@ export default function App() {
       case 'import':      return <ImportTab />
       case 'products':    return <ProductList />
       case 'margins':     return <MarginAnalysis />
-      case 'performance': return <StockPerformanceTab />
-      case 'scout':       return <ProductScoutTab />
       default: return <div className="p-4 text-sm text-gray-400">Unknown tab</div>
     }
   }
