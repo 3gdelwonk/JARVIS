@@ -229,7 +229,13 @@ function HistoryView({ onBuild, onViewOrder }: HistoryViewProps) {
   const [pulling, setPulling] = useState(false)
 
   const orders = useLiveQuery(
-    () => db.orders.orderBy('createdAt').reverse().toArray(),
+    () => db.orders.toArray().then(all =>
+      all.sort((a, b) => {
+        const da = new Date(a.createdAt).getTime() || 0
+        const db2 = new Date(b.createdAt).getTime() || 0
+        return db2 - da
+      })
+    ),
     [],
   )
 
@@ -309,7 +315,7 @@ function HistoryView({ onBuild, onViewOrder }: HistoryViewProps) {
                     })}
                   </p>
                   <p className="text-xs text-gray-500 mt-0.5">
-                    ${order.totalCostEstimate.toFixed(2)} est.
+                    ${(order.totalCostEstimate ?? 0).toFixed(2)} est.
                   </p>
                 </button>
                 <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium shrink-0 ${STATUS_BADGE[order.status]}`}>

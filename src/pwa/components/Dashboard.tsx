@@ -140,7 +140,13 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
   const [showWasteEditModal, setShowWasteEditModal] = useState(false)
   // Live queries
   const recentOrders = useLiveQuery(
-    () => db.orders.orderBy('createdAt').reverse().limit(5).toArray(),
+    () => db.orders.toArray().then(all =>
+      all.sort((a, b) => {
+        const da = new Date(a.createdAt).getTime() || 0
+        const db2 = new Date(b.createdAt).getTime() || 0
+        return db2 - da
+      }).slice(0, 5)
+    ),
     [],
   )
 
@@ -647,7 +653,7 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
                     })}
                   </p>
                   <p className="text-[11px] text-gray-400">
-                    ${order.totalCostEstimate.toFixed(2)} est.
+                    ${(order.totalCostEstimate ?? 0).toFixed(2)} est.
                   </p>
                 </div>
                 <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${STATUS_BADGE[order.status]}`}>

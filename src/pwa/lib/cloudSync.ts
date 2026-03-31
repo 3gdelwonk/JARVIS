@@ -45,6 +45,12 @@ const FK_LOCAL_ID: Record<string, string> = {
   expiryBatchSyncId: 'expiryBatchId',
 }
 
+// Date fields that arrive as strings from JSON and need conversion back to Date objects
+const DATE_FIELDS = [
+  'createdAt', 'approvedAt', 'submittedAt', 'updatedAt', 'capturedAt',
+  'syncedAt', 'receivedDate', 'wastedDate', 'importedAt',
+]
+
 // ── Device ID ──
 
 export function getDeviceId(): string {
@@ -223,6 +229,12 @@ export async function syncPull(): Promise<number> {
       const table = db.table(tableName)
 
       for (const remote of records) {
+        // Convert date strings back to Date objects (JSON strips Date type)
+        for (const key of DATE_FIELDS) {
+          if (key in remote && typeof remote[key] === 'string') {
+            remote[key] = new Date(remote[key])
+          }
+        }
         // Find existing local record by syncId
         const existing = await table.where('syncId').equals(remote.syncId).first()
 
