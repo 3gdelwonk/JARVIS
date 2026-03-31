@@ -229,23 +229,30 @@ function getHeader(msg: GmailFullMessage, name: string): string {
 
 // ─── Main sync ────────────────────────────────────────────────────────────────
 
-export async function syncGmailOrders(): Promise<{ count: number; processed: number; found: number; errors: string[] }> {
+export async function syncGmailOrders(forceRescan = false): Promise<{ count: number; processed: number; found: number; errors: string[] }> {
   const token = await getValidToken()
   const errors: string[] = []
 
-  // Smart retry: clear sync log entries that didn't result in actual orders
-  const syncLog = await db.gmailSyncLog.toArray()
-  if (syncLog.length > 0) {
-    const allOrders = await db.orders.toArray()
-    const orderNumbers = new Set(
-      allOrders.filter((o) => o.lactalisOrderNumber).map((o) => o.lactalisOrderNumber),
-    )
-    const toRetry = syncLog.filter(
-      (entry) => !entry.parsed || !entry.orderNumber || !orderNumbers.has(entry.orderNumber),
-    )
-    if (toRetry.length > 0) {
-      console.log(`[Gmail] Retrying ${toRetry.length} emails (no matching order found)`)
-      await db.gmailSyncLog.bulkDelete(toRetry.map((e) => e.id!).filter(Boolean))
+  if (forceRescan) {
+    // Nuclear option: clear entire sync log so every email is re-processed
+    const cleared = await db.gmailSyncLog.count()
+    await db.gmailSyncLog.clear()
+    console.log(`[Gmail] Force rescan — cleared ${cleared} sync log entries`)
+  } else {
+    // Smart retry: clear sync log entries that didn't result in actual orders
+    const syncLog = await db.gmailSyncLog.toArray()
+    if (syncLog.length > 0) {
+      const allOrders = await db.orders.toArray()
+      const orderNumbers = new Set(
+        allOrders.filter((o) => o.lactalisOrderNumber).map((o) => o.lactalisOrderNumber),
+      )
+      const toRetry = syncLog.filter(
+        (entry) => !entry.parsed || !entry.orderNumber || !orderNumbers.has(entry.orderNumber),
+      )
+      if (toRetry.length > 0) {
+        console.log(`[Gmail] Retrying ${toRetry.length} emails (no matching order found)`)
+        await db.gmailSyncLog.bulkDelete(toRetry.map((e) => e.id!).filter(Boolean))
+      }
     }
   }
 
@@ -270,7 +277,24 @@ export async function syncGmailOrders(): Promise<{ count: number; processed: num
       const full = await fetchMessage(token, msg.id)
       const subject = getHeader(full, 'subject')
       const { content, isHtml } = extractBody(full)
-      const parsed = parseOrderEmail(content, isHtml)
+      let parsed = parseOrderEmail(content, isHtml)
+
+      // Last resort: try extracting order number from subject line
+      if (!parsed) {
+        const subjectNum = subject.match(/\b(\d{6,})\b/)
+        if (subjectNum) {
+          parsed = {
+            orderNumber: subjectNum[1],
+            createdAt: null,
+            deliveryDate: null,
+            orderStatus: 'submitted',
+            refNumber: null,
+            totalQty: 0,
+            total: 0,
+            lineItems: [],
+          }
+        }
+      }
 
       console.log(`[Gmail] ${parsed ? '✓' : '✗'} "${subject}" → ${parsed ? `Order #${parsed.orderNumber}` : 'no order number found'}`)
 
@@ -280,7 +304,7 @@ export async function syncGmailOrders(): Promise<{ count: number; processed: num
         parsed: parsed !== null,
         subject,
         orderNumber: parsed?.orderNumber,
-        parseError: parsed ? undefined : 'Could not extract order number',
+        parseError: parsed ? undefined : `No order number in: "${subject}"`,
       }
       await db.gmailSyncLog.add(record)
       processed++

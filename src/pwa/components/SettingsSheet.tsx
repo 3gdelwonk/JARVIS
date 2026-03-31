@@ -141,18 +141,19 @@ export default function SettingsSheet({ onClose }: Props) {
     localStorage.setItem('milk-manager-gmail-auto-sync', String(next))
   }
 
-  async function handleGmailSyncNow() {
+  async function handleGmailSyncNow(force = false) {
     handleGmailClientIdSave()
     setGmailBusy(true)
-    setGmailStatus(null)
+    setGmailStatus(force ? 'Full rescan in progress…' : null)
     try {
-      const result = await syncGmailOrders()
+      const result = await syncGmailOrders(force)
       setGmailLastSync(getGmailLastSync())
       setGmailConnected(isGmailConnected())
       const parts = [`${result.found} emails found`]
-      if (result.processed > 0) parts.push(`${result.processed} new`)
+      if (result.processed > 0) parts.push(`${result.processed} scanned`)
       if (result.count > 0) parts.push(`${result.count} orders imported`)
       if (result.found > 0 && result.processed === 0) parts.push('all already synced')
+      if (result.processed > 0 && result.count === 0) parts.push('no order numbers detected')
       if (result.errors.length > 0) parts.push(`${result.errors.length} errors`)
       setGmailStatus(parts.join(', '))
     } catch (err: any) {
@@ -458,12 +459,19 @@ export default function SettingsSheet({ onClose }: Props) {
                 ) : (
                   <>
                     <button
-                      onClick={handleGmailSyncNow}
+                      onClick={() => handleGmailSyncNow()}
                       disabled={gmailBusy}
                       className="flex items-center gap-1.5 px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 disabled:opacity-50"
                     >
                       <RefreshCw size={14} className={gmailBusy ? 'animate-spin' : ''} />
                       {gmailBusy ? 'Scanning…' : 'Sync Now'}
+                    </button>
+                    <button
+                      onClick={() => handleGmailSyncNow(true)}
+                      disabled={gmailBusy}
+                      className="flex items-center gap-1.5 px-3 py-2 border border-orange-300 rounded-lg text-sm text-orange-600 disabled:opacity-50"
+                    >
+                      Full Rescan
                     </button>
                     <button
                       onClick={handleGmailDisconnect}
