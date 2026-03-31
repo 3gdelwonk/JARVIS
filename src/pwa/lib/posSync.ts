@@ -116,7 +116,7 @@ export interface PosSyncResult {
  * Fetch live POS data and persist stock snapshots + sales records to Dexie.
  * Safe to call from any tab — idempotent per day (deduplicates by batchId date).
  */
-export async function syncPosData(days = 7): Promise<PosSyncResult> {
+export async function syncPosData(days = 1): Promise<PosSyncResult> {
   const posItems = await getDairyPerformance(days)
   const posMap = buildPosMap(posItems)
 
@@ -130,15 +130,11 @@ export async function syncPosData(days = 7): Promise<PosSyncResult> {
   const today = new Date().toISOString().split('T')[0]
   const batchId = `pos_live_${today}`
 
-  // Check if we already synced today
-  const existing = await db.stockSnapshots
+  // Check if stock snapshots already written today (sales always refresh)
+  const snapshotsExist = await db.stockSnapshots
     .where('importBatchId')
     .equals(batchId)
     .first()
-  if (existing) {
-    // Already synced today — just return the map for live use
-    return { posMap, snapshotsWritten: 0, salesWritten: 0, matched: 0, unmatched: 0 }
-  }
 
   const snapshots: Array<{
     productId: number
@@ -183,16 +179,15 @@ export async function syncPosData(days = 7): Promise<PosSyncResult> {
       importBatchId: batchId,
     })
 
-    // Sales record — write daily averages (not multi-day totals) so velocity
-    // calculations are correct from day one. Accuracy improves as daily syncs accumulate.
-    if (item.avgDailyVelocity > 0 || item.revenue > 0) {
+    // Sales record — actual daily totals (days=1 gives today's real figures)
+    if (item.qtySold > 0 || item.revenue > 0) {
       salesRecords.push({
         productId: product.id!,
         barcode: product.barcode,
         date: today,
-        qtySold: Math.round(item.avgDailyVelocity * 100) / 100,
-        salesValue: Math.round((item.revenue / days) * 100) / 100,
-        cogs: Math.round((item.cost / days) * 100) / 100,
+        qtySold: item.qtySold,
+        salesValue: Math.round(item.revenue * 100) / 100,
+        cogs: Math.round(item.cost * 100) / 100,
         department: product.department || 'dairy',
         importBatchId: batchId,
         importedAt: new Date(),
@@ -200,10 +195,13 @@ export async function syncPosData(days = 7): Promise<PosSyncResult> {
     }
   }
 
-  if (snapshots.length > 0) {
+  // Write stock snapshots only if not already done today
+  if (!snapshotsExist && snapshots.length > 0) {
     await db.stockSnapshots.bulkAdd(snapshots).catch(() => {})
   }
+  // Always refresh today's sales records with latest figures
   if (salesRecords.length > 0) {
+    await db.salesRecords.where('importBatchId').equals(batchId).delete()
     await db.salesRecords.bulkAdd(salesRecords).catch(() => {})
   }
 

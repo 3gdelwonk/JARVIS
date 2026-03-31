@@ -268,7 +268,7 @@ export async function generateForecasts(
   settings: ForecastSettings = getSettings(),
 ): Promise<{ forecasts: Forecast[]; posMap: Map<string, ItemPerformance> }> {
   // Fetch + persist POS data in parallel with DB queries
-  const posPromise = syncPosData(7)
+  const posPromise = syncPosData(1)
 
   const [allProducts, allLines, allRecords, allSnapshots, allBatches, allWaste, allSales] = await Promise.all([
     db.products.toArray(),
