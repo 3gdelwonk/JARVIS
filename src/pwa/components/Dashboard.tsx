@@ -119,12 +119,12 @@ function TopSellerRow({ rank, s, imageUrl, expanded, onToggle }: {
           {/* Week comparison */}
           <div className="flex gap-2">
             <div className="flex-1 bg-white rounded-lg p-2 border border-gray-100">
-              <p className="text-[10px] text-gray-400 uppercase">This Week</p>
+              <p className="text-[10px] text-gray-400 uppercase">Last Week</p>
               <p className="text-sm font-semibold text-gray-900">{Math.round(s.totalQty)} units</p>
               <p className="text-[11px] text-gray-500">${s.totalRevenue.toFixed(2)}</p>
             </div>
             <div className="flex-1 bg-white rounded-lg p-2 border border-gray-100">
-              <p className="text-[10px] text-gray-400 uppercase">Last Week</p>
+              <p className="text-[10px] text-gray-400 uppercase">Week Before</p>
               <p className="text-sm font-semibold text-gray-900">{Math.round(s.prevWeekQty)} units</p>
               <p className="text-[11px] text-gray-500">${s.prevWeekRevenue.toFixed(2)}</p>
             </div>
@@ -237,7 +237,7 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
     [],
   )
 
-  // Async: top sellers from sales data (past 7 days vs previous 7 days)
+  // Async: top sellers from last week's sales data, compared to week before
   useEffect(() => {
     let cancelled = false
     setLoadingSales(true)
@@ -245,29 +245,32 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
     async function loadTopSellers() {
       try {
         const now = new Date()
-        const thisWeekStart = new Date(now)
-        thisWeekStart.setDate(thisWeekStart.getDate() - 7)
+        const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+        const todayStr = fmt(now)
+        const lastWeekStart = new Date(now)
+        lastWeekStart.setDate(lastWeekStart.getDate() - 7)
         const prevWeekStart = new Date(now)
         prevWeekStart.setDate(prevWeekStart.getDate() - 14)
-        const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-        const thisWeekStr = fmt(thisWeekStart)
+        const lastWeekStr = fmt(lastWeekStart)
         const prevWeekStr = fmt(prevWeekStart)
 
         const allSales = await db.salesRecords.toArray()
-        const thisWeek = allSales.filter((s) => s.date >= thisWeekStr)
-        const prevWeek = allSales.filter((s) => s.date >= prevWeekStr && s.date < thisWeekStr)
+        // Last week = 7 days ago to yesterday
+        const lastWeek = allSales.filter((s) => s.date >= lastWeekStr && s.date < todayStr)
+        // Week before = 14 days ago to 7 days ago
+        const weekBefore = allSales.filter((s) => s.date >= prevWeekStr && s.date < lastWeekStr)
 
         const products = await db.products.toArray()
         const productMap = new Map(products.map((p) => [p.id!, p]))
 
-        // This week aggregation
+        // Last week aggregation (primary ranking)
         const map = new Map<number, {
           productName: string; totalQty: number; totalRevenue: number
           prevWeekQty: number; prevWeekRevenue: number
           dailyMap: Map<string, { qty: number; revenue: number }>
         }>()
 
-        for (const s of thisWeek) {
+        for (const s of lastWeek) {
           const pid = s.productId
           if (!pid) continue
           const existing = map.get(pid)
@@ -289,8 +292,8 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
           }
         }
 
-        // Previous week aggregation
-        for (const s of prevWeek) {
+        // Week before aggregation (for comparison)
+        for (const s of weekBefore) {
           const pid = s.productId
           if (!pid) continue
           const existing = map.get(pid)
@@ -520,7 +523,7 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
       <div className="mx-3 mt-4">
         <div className="flex items-center justify-between mb-2">
           <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-            Top Sellers This Week
+            Top Sellers Last Week
           </p>
           {!loadingSales && topSellers.length > 0 && (
             <span className="text-[11px] text-gray-400">{topSellers.length} products</span>
