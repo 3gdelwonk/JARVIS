@@ -4,7 +4,7 @@
  * Sections:
  *  1. Next delivery countdown (DeliverySlots DB, falls back to Mon/Wed/Fri pattern)
  *  2. Quick action — "Build New Order"
- *  3. Reorder alerts — top 8 products needing urgent ordering
+ *  3. Top sellers — past week's sales ranked by quantity sold
  *  4. Weekly spend chart — last 8 weeks (Recharts BarChart)
  *  5. Recent orders — last 5 with status badges
  */
@@ -35,7 +35,7 @@ import {
   X,
 } from 'lucide-react'
 import { db } from '../lib/db'
-import { generateForecasts, getSettings, type Forecast } from '../lib/forecastEngine'
+// forecast import removed — top sellers section uses sales data directly
 import { analyzeHistory } from '../lib/historyAnalyzer'
 import { AVG_DELIVERY_COST, DELIVERY_DAYS, nextDeliveryDate, friendlyError, STATUS_BADGE } from '../lib/constants'
 import { getExtensionStatus, triggerScheduleRefresh, fetchCloudSchedule } from '../lib/extensionSync'
@@ -75,13 +75,19 @@ function downloadWasteCsv(entries: import('../lib/types').WasteEntry[]) {
   downloadFile(buildWasteCsv(entries), `waste-report-${new Date().toISOString().split('T')[0]}.csv`)
 }
 
-// ─── Reorder alert row ────────────────────────────────────────────────────────
+// ─── Top seller row ──────────────────────────────────────────────────────────
 
-function AlertRow({ f, imageUrl }: { f: Forecast; imageUrl?: string }) {
-  const isHot = f.daysUntilStockout !== null && f.daysUntilStockout <= 2
+interface TopSeller {
+  productId: number
+  productName: string
+  totalQty: number
+  totalRevenue: number
+}
 
+function TopSellerRow({ rank, s, imageUrl }: { rank: number; s: TopSeller; imageUrl?: string }) {
   return (
     <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-100 last:border-0">
+      <span className="text-xs font-bold text-gray-300 w-5 text-center shrink-0">{rank}</span>
       <div className="relative w-8 h-8 rounded-md overflow-hidden bg-gray-100 shrink-0 flex items-center justify-center">
         <ImageOff size={12} className="text-gray-300" />
         {imageUrl && (
@@ -89,17 +95,12 @@ function AlertRow({ f, imageUrl }: { f: Forecast; imageUrl?: string }) {
         )}
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-sm text-gray-800 truncate">{f.productName}</p>
-        <p className="text-[11px] text-gray-400">
-          {f.currentStock !== null ? `${f.currentStock} in stock` : 'stock unknown'}
-          {f.daysUntilStockout !== null && ` · ${f.daysUntilStockout}d left`}
-        </p>
+        <p className="text-sm text-gray-800 truncate">{s.productName}</p>
+        <p className="text-[11px] text-gray-400">${s.totalRevenue.toFixed(2)} revenue</p>
       </div>
       <div className="text-right shrink-0">
-        <p className={`text-sm font-semibold ${isHot ? 'text-red-600' : 'text-blue-600'}`}>
-          ×{f.suggestedQty}
-        </p>
-        <p className="text-[11px] text-gray-400">suggested</p>
+        <p className="text-sm font-semibold text-gray-800">{s.totalQty}</p>
+        <p className="text-[11px] text-gray-400">sold</p>
       </div>
     </div>
   )
@@ -128,12 +129,11 @@ interface Props {
 }
 
 export default function Dashboard({ onNavigateToOrder }: Props) {
-  const [alerts, setAlerts] = useState<Forecast[]>([])
+  const [topSellers, setTopSellers] = useState<TopSeller[]>([])
   const [weeklyData, setWeeklyData] = useState<{ week: string; spend: number }[]>([])
   const [totalSpend, setTotalSpend] = useState(0)
-  const [loadingForecasts, setLoadingForecasts] = useState(true)
+  const [loadingSales, setLoadingSales] = useState(true)
   const [loadingHistory, setLoadingHistory] = useState(true)
-  const [forecastError, setForecastError] = useState<string | null>(null)
   const [historyError, setHistoryError] = useState<string | null>(null)
   const [extStatus, setExtStatus] = useState<{ connected: boolean; lactalisLoggedIn: boolean } | null>(null)
   const [refreshingSchedule, setRefreshingSchedule] = useState(false)
@@ -181,39 +181,57 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
     [],
   )
 
-  // Async: forecast for reorder alerts
+  // Async: top sellers from sales data (past 7 days)
   useEffect(() => {
     let cancelled = false
+    setLoadingSales(true)
 
-    function runForecast() {
-      cancelled = false
-      setLoadingForecasts(true)
-      setForecastError(null)
-      generateForecasts(getSettings())
-        .then(({ forecasts }) => {
-          if (cancelled) return
-          const urgent = forecasts
-            .filter((f) => f.suggestedQty > 0)
-            .sort((a, b) => {
-              const aDay = a.daysUntilStockout ?? 999
-              const bDay = b.daysUntilStockout ?? 999
-              if (aDay !== bDay) return aDay - bDay
-              return b.suggestedQty - a.suggestedQty
+    async function loadTopSellers() {
+      try {
+        const cutoff = new Date()
+        cutoff.setDate(cutoff.getDate() - 7)
+        const cutoffStr = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, '0')}-${String(cutoff.getDate()).padStart(2, '0')}`
+
+        const allSales = await db.salesRecords.toArray()
+        const recent = allSales.filter((s) => s.date >= cutoffStr)
+
+        // Aggregate by productId
+        const map = new Map<number, { productName: string; totalQty: number; totalRevenue: number }>()
+        const products = await db.products.toArray()
+        const productMap = new Map(products.map((p) => [p.id!, p]))
+
+        for (const s of recent) {
+          const pid = s.productId
+          if (!pid) continue
+          const existing = map.get(pid)
+          if (existing) {
+            existing.totalQty += s.qtySold
+            existing.totalRevenue += s.salesValue
+          } else {
+            const prod = productMap.get(pid)
+            map.set(pid, {
+              productName: prod?.name ?? s.barcode,
+              totalQty: s.qtySold,
+              totalRevenue: s.salesValue,
             })
-            .slice(0, 8)
-          setAlerts(urgent)
-        })
-        .catch((e) => { if (!cancelled) setForecastError(friendlyError(e)) })
-        .finally(() => { if (!cancelled) setLoadingForecasts(false) })
+          }
+        }
+
+        const sorted = Array.from(map.entries())
+          .map(([productId, data]) => ({ productId, ...data }))
+          .sort((a, b) => b.totalQty - a.totalQty)
+          .slice(0, 10)
+
+        if (!cancelled) setTopSellers(sorted)
+      } catch (e) {
+        console.warn('[Dashboard] Failed to load top sellers:', e)
+      } finally {
+        if (!cancelled) setLoadingSales(false)
+      }
     }
 
-    runForecast()
-    // Re-run when the user saves new forecast settings from SettingsSheet
-    window.addEventListener('forecast-settings-changed', runForecast)
-    return () => {
-      cancelled = true
-      window.removeEventListener('forecast-settings-changed', runForecast)
-    }
+    loadTopSellers()
+    return () => { cancelled = true }
   }, [])
 
   // Async: weekly spend history
@@ -405,33 +423,31 @@ export default function Dashboard({ onNavigateToOrder }: Props) {
         </button>
       </div>
 
-      {/* ── Reorder alerts ─────────────────────────────────────────────────── */}
+      {/* ── Top sellers this week ────────────────────────────────────────── */}
       <div className="mx-3 mt-4">
         <div className="flex items-center justify-between mb-2">
           <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-            Needs Ordering
+            Top Sellers This Week
           </p>
-          {!loadingForecasts && (
-            <span className="text-[11px] text-gray-400">{alerts.length} products</span>
+          {!loadingSales && topSellers.length > 0 && (
+            <span className="text-[11px] text-gray-400">{topSellers.length} products</span>
           )}
         </div>
 
         <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-          {loadingForecasts ? (
+          {loadingSales ? (
             <div className="py-6 flex items-center justify-center">
-              <p className="text-xs text-gray-400">Loading forecast…</p>
+              <p className="text-xs text-gray-400">Loading sales data…</p>
             </div>
-          ) : forecastError ? (
-            <div className="py-5 text-center px-4">
-              <p className="text-xs text-red-500">{forecastError}</p>
-            </div>
-          ) : alerts.length === 0 ? (
+          ) : topSellers.length === 0 ? (
             <div className="py-6 text-center">
-              <p className="text-sm text-green-600 font-medium">All stocked up</p>
-              <p className="text-xs text-gray-400 mt-0.5">No reorders needed right now</p>
+              <p className="text-sm text-gray-500 font-medium">No sales data yet</p>
+              <p className="text-xs text-gray-400 mt-0.5">Import POS data from JARVISmart</p>
             </div>
           ) : (
-            alerts.map((f) => <AlertRow key={f.productId} f={f} imageUrl={productImageMap?.get(f.productId)} />)
+            topSellers.map((s, i) => (
+              <TopSellerRow key={s.productId} rank={i + 1} s={s} imageUrl={productImageMap?.get(s.productId)} />
+            ))
           )}
         </div>
       </div>
