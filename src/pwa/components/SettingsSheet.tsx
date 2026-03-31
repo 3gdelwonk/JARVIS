@@ -149,8 +149,10 @@ export default function SettingsSheet({ onClose }: Props) {
       const result = await syncGmailOrders()
       setGmailLastSync(getGmailLastSync())
       setGmailConnected(isGmailConnected())
-      const parts = [`${result.processed} emails scanned`]
+      const parts = [`${result.found} emails found`]
+      if (result.processed > 0) parts.push(`${result.processed} new`)
       if (result.count > 0) parts.push(`${result.count} orders imported`)
+      if (result.found > 0 && result.processed === 0) parts.push('all already synced')
       if (result.errors.length > 0) parts.push(`${result.errors.length} errors`)
       setGmailStatus(parts.join(', '))
     } catch (err: any) {

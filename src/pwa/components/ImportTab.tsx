@@ -699,7 +699,7 @@ function GmailSection() {
   const [syncing, setSyncing] = useState(false)
   const [connecting, setConnecting] = useState(false)
   const [lastSync, setLastSync] = useState<string | null>(getGmailLastSync)
-  const [result, setResult] = useState<{ count: number; processed: number; errors: string[] } | null>(null)
+  const [result, setResult] = useState<{ count: number; processed: number; found: number; errors: string[] } | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   async function handleConnect() {
@@ -792,13 +792,8 @@ function GmailSection() {
             <span className="text-sm font-medium text-green-800">Sync complete</span>
           </div>
           <p className="text-xs text-green-700 ml-5">
-            {result.count} new order{result.count !== 1 ? 's' : ''} imported
+            {result.found} email{result.found !== 1 ? 's' : ''} found, {result.processed} scanned, {result.count} order{result.count !== 1 ? 's' : ''} imported
           </p>
-          {result.processed > result.count && (
-            <p className="text-xs text-green-600 ml-5">
-              {result.processed - result.count} already up to date
-            </p>
-          )}
           {result.errors.length > 0 && (
             <div className="ml-5 mt-1 space-y-0.5">
               {result.errors.map((e, i) => (

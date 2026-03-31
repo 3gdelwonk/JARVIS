@@ -229,12 +229,25 @@ function getHeader(msg: GmailFullMessage, name: string): string {
 
 // ─── Main sync ────────────────────────────────────────────────────────────────
 
-export async function syncGmailOrders(): Promise<{ count: number; processed: number; errors: string[] }> {
+export async function syncGmailOrders(): Promise<{ count: number; processed: number; found: number; errors: string[] }> {
   const token = await getValidToken()
   const errors: string[] = []
 
-  // Retry previously failed parses (parser may have been improved)
-  await db.gmailSyncLog.filter((r) => !r.parsed).delete()
+  // Smart retry: clear sync log entries that didn't result in actual orders
+  const syncLog = await db.gmailSyncLog.toArray()
+  if (syncLog.length > 0) {
+    const allOrders = await db.orders.toArray()
+    const orderNumbers = new Set(
+      allOrders.filter((o) => o.lactalisOrderNumber).map((o) => o.lactalisOrderNumber),
+    )
+    const toRetry = syncLog.filter(
+      (entry) => !entry.parsed || !entry.orderNumber || !orderNumbers.has(entry.orderNumber),
+    )
+    if (toRetry.length > 0) {
+      console.log(`[Gmail] Retrying ${toRetry.length} emails (no matching order found)`)
+      await db.gmailSyncLog.bulkDelete(toRetry.map((e) => e.id!).filter(Boolean))
+    }
+  }
 
   const lastSync = localStorage.getItem(LS_LAST_SYNC)
   let afterDate: string | undefined
@@ -245,6 +258,7 @@ export async function syncGmailOrders(): Promise<{ count: number; processed: num
   }
 
   const messages = await listMessages(token, afterDate)
+  console.log(`[Gmail] Found ${messages.length} emails from Lactalis${afterDate ? ` (after ${afterDate})` : ''}`)
   const parsedOrders: ScrapedOrder[] = []
   let processed = 0
 
@@ -257,6 +271,8 @@ export async function syncGmailOrders(): Promise<{ count: number; processed: num
       const subject = getHeader(full, 'subject')
       const { content, isHtml } = extractBody(full)
       const parsed = parseOrderEmail(content, isHtml)
+
+      console.log(`[Gmail] ${parsed ? '✓' : '✗'} "${subject}" → ${parsed ? `Order #${parsed.orderNumber}` : 'no order number found'}`)
 
       const record: Omit<GmailSyncRecord, 'id'> = {
         messageId: msg.id,
@@ -277,7 +293,7 @@ export async function syncGmailOrders(): Promise<{ count: number; processed: num
   let count = 0
   if (parsedOrders.length > 0) count = await upsertOrderHistory(parsedOrders)
   localStorage.setItem(LS_LAST_SYNC, new Date().toISOString())
-  return { count, processed, errors }
+  return { count, processed, found: messages.length, errors }
 }
 
 // ─── OAuth connect / disconnect ───────────────────────────────────────────────
