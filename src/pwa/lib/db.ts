@@ -102,6 +102,10 @@ export class MilkManagerDB extends Dexie {
         })
       ))
     })
+    // v9 — compound index for date+productId dedup on salesRecords
+    this.version(9).stores({
+      salesRecords: '++id, productId, barcode, date, department, syncId, syncUpdatedAt, [date+productId]',
+    })
   }
 }
 

@@ -1,16 +1,30 @@
 /**
- * posSync.ts — Shared POS-to-Dexie sync
+ * posSync.ts — Shared POS-to-Dexie sync with backfill
  *
  * Fetches live POS performance data (MILK + DAIRY departments) and persists
  * both stock snapshots and sales records to Dexie with correct productId linking.
  *
- * All tabs (Order Builder, Products, Performance) read from the same Dexie tables,
- * so this single sync feeds them all.
+ * Backfill: On each sync, detects missed days since last sync and makes
+ * successive API calls (days=1..N) to compute per-day sales via subtraction.
+ *
+ * Dedup: Uses date+productId compound index to prevent cross-device duplication.
  */
 
 import { db } from './db'
 import { getDairyPerformance, type ItemPerformance } from './posRelay'
 import type { Product } from './types'
+
+// ── Last sync tracking ──────────────────────────────────────────────────────
+
+const LAST_SYNC_KEY = 'milk-manager-pos-last-sync'
+
+function getLastSyncDate(): string | null {
+  return localStorage.getItem(LAST_SYNC_KEY)
+}
+
+function setLastSyncDate(date: string): void {
+  localStorage.setItem(LAST_SYNC_KEY, date)
+}
 
 // ── POS item matching ────────────────────────────────────────────────────────
 
@@ -110,27 +124,73 @@ export interface PosSyncResult {
   salesWritten: number
   matched: number
   unmatched: number
+  backfilledDays: number
+}
+
+/** Format a Date as YYYY-MM-DD in local time */
+function toDateStr(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+/** Count calendar days between two YYYY-MM-DD strings */
+function daysBetween(a: string, b: string): number {
+  const da = new Date(a + 'T00:00:00')
+  const db = new Date(b + 'T00:00:00')
+  return Math.round((db.getTime() - da.getTime()) / 86400000)
+}
+
+/**
+ * Write sales records for a single date with date+productId dedup.
+ * Deletes any existing records matching the same date+productId combos before inserting.
+ */
+async function writeSalesRecords(
+  records: Array<{
+    productId: number
+    barcode: string
+    date: string
+    qtySold: number
+    salesValue: number
+    cogs: number
+    department: string
+    importBatchId: string
+    importedAt: Date
+  }>,
+): Promise<void> {
+  if (records.length === 0) return
+
+  const date = records[0]!.date
+
+  // Delete existing records for this date + any of these productIds
+  // Use compound index [date+productId] for efficient deletion
+  const productIds = records.map(r => r.productId)
+  await db.salesRecords
+    .where('[date+productId]')
+    .anyOf(productIds.map(pid => [date, pid]))
+    .delete()
+
+  await db.salesRecords.bulkAdd(records).catch(() => {})
 }
 
 /**
  * Fetch live POS data and persist stock snapshots + sales records to Dexie.
- * Safe to call from any tab — idempotent per day (deduplicates by batchId date).
+ * Backfills missed days using successive API subtraction.
+ * Deduplicates by date+productId to prevent cross-device duplication.
  */
 export async function syncPosData(days = 1): Promise<PosSyncResult> {
   const posItems = await getDairyPerformance(days)
   const posMap = buildPosMap(posItems)
 
   if (posItems.length === 0) {
-    return { posMap, snapshotsWritten: 0, salesWritten: 0, matched: 0, unmatched: 0 }
+    return { posMap, snapshotsWritten: 0, salesWritten: 0, matched: 0, unmatched: 0, backfilledDays: 0 }
   }
 
   const allProducts = await db.products.toArray()
   const products = allProducts.filter(p => p.active !== false)
 
-  const today = new Date().toISOString().split('T')[0]
+  const today = toDateStr(new Date())
   const batchId = `pos_live_${today}`
 
-  // Check if stock snapshots already written today (sales always refresh)
+  // Check if stock snapshots already written today
   const snapshotsExist = await db.stockSnapshots
     .where('importBatchId')
     .equals(batchId)
@@ -145,7 +205,7 @@ export async function syncPosData(days = 1): Promise<PosSyncResult> {
     importBatchId: string
   }> = []
 
-  const salesRecords: Array<{
+  const todaySales: Array<{
     productId: number
     barcode: string
     date: string
@@ -160,14 +220,19 @@ export async function syncPosData(days = 1): Promise<PosSyncResult> {
   let matched = 0
   let unmatched = 0
 
+  // Build itemCode → product mapping for reuse in backfill
+  const itemProductMap = new Map<string, Product>()
+
   for (const item of posItems) {
     const product = findMatchingProduct(item, products)
     if (!product) {
       unmatched++
-      console.log(`[POS Sync] No match: ${item.itemCode} "${item.description}"`)
       continue
     }
     matched++
+
+    // Cache the match for backfill
+    itemProductMap.set(item.itemCode, product)
 
     // Stock snapshot
     snapshots.push({
@@ -181,7 +246,7 @@ export async function syncPosData(days = 1): Promise<PosSyncResult> {
 
     // Sales record — actual daily totals (days=1 gives today's real figures)
     if (item.qtySold > 0 || item.revenue > 0) {
-      salesRecords.push({
+      todaySales.push({
         productId: product.id!,
         barcode: product.barcode,
         date: today,
@@ -199,19 +264,100 @@ export async function syncPosData(days = 1): Promise<PosSyncResult> {
   if (!snapshotsExist && snapshots.length > 0) {
     await db.stockSnapshots.bulkAdd(snapshots).catch(() => {})
   }
-  // Always refresh today's sales records with latest figures
-  if (salesRecords.length > 0) {
-    await db.salesRecords.where('importBatchId').equals(batchId).delete()
-    await db.salesRecords.bulkAdd(salesRecords).catch(() => {})
+
+  // Write today's sales with date+productId dedup
+  await writeSalesRecords(todaySales)
+
+  let totalSalesWritten = todaySales.length
+  let backfilledDays = 0
+
+  // ── Backfill missed days ──────────────────────────────────────────────────
+  const lastSync = getLastSyncDate()
+  if (lastSync && lastSync !== today) {
+    const missed = Math.min(7, daysBetween(lastSync, today) - 1)
+
+    if (missed > 0) {
+      console.log(`[POS Sync] Backfilling ${missed} missed day(s) since ${lastSync}`)
+
+      // We already have days=1 result (posItems). Fetch days=2 through days=(missed+1) in parallel.
+      const cumulativeResults = new Map<number, ItemPerformance[]>()
+      cumulativeResults.set(1, posItems)
+
+      const fetchPromises: Promise<void>[] = []
+      for (let d = 2; d <= missed + 1; d++) {
+        fetchPromises.push(
+          getDairyPerformance(d).then(items => {
+            cumulativeResults.set(d, items)
+          }),
+        )
+      }
+      await Promise.all(fetchPromises)
+
+      // For each missed day, compute per-day data via subtraction
+      for (let d = 1; d <= missed; d++) {
+        const cumLarger = cumulativeResults.get(d + 1)  // days=(d+1) cumulative
+        const cumSmaller = cumulativeResults.get(d)      // days=d cumulative
+        if (!cumLarger || !cumSmaller) continue
+
+        // Build lookup by itemCode for the smaller cumulative
+        const smallerByCode = new Map<string, ItemPerformance>()
+        for (const item of cumSmaller) {
+          smallerByCode.set(item.itemCode, item)
+        }
+
+        // Compute the date for this backfill day
+        const backfillDate = new Date()
+        backfillDate.setDate(backfillDate.getDate() - d)
+        const dateStr = toDateStr(backfillDate)
+        const backfillBatchId = `pos_backfill_${dateStr}`
+
+        const backfillSales: typeof todaySales = []
+
+        for (const item of cumLarger) {
+          const smaller = smallerByCode.get(item.itemCode)
+          const product = itemProductMap.get(item.itemCode)
+          if (!product) continue
+
+          // Subtract to get this specific day's values
+          const dailyQty = Math.max(0, item.qtySold - (smaller?.qtySold ?? 0))
+          const dailyRevenue = Math.max(0, item.revenue - (smaller?.revenue ?? 0))
+          const dailyCost = Math.max(0, item.cost - (smaller?.cost ?? 0))
+
+          if (dailyQty > 0 || dailyRevenue > 0) {
+            backfillSales.push({
+              productId: product.id!,
+              barcode: product.barcode,
+              date: dateStr,
+              qtySold: dailyQty,
+              salesValue: Math.round(dailyRevenue * 100) / 100,
+              cogs: Math.round(dailyCost * 100) / 100,
+              department: product.department || 'dairy',
+              importBatchId: backfillBatchId,
+              importedAt: new Date(),
+            })
+          }
+        }
+
+        await writeSalesRecords(backfillSales)
+        totalSalesWritten += backfillSales.length
+        backfilledDays++
+      }
+
+      console.log(`[POS Sync] Backfilled ${backfilledDays} day(s)`)
+    }
   }
 
-  console.log(`[POS Sync] ${matched} matched, ${unmatched} unmatched, ${snapshots.length} snapshots, ${salesRecords.length} sales`)
+  // Update last sync date
+  setLastSyncDate(today)
+
+  console.log(`[POS Sync] ${matched} matched, ${unmatched} unmatched, ${snapshots.length} snapshots, ${totalSalesWritten} sales (${backfilledDays} backfilled days)`)
 
   return {
     posMap,
     snapshotsWritten: snapshots.length,
-    salesWritten: salesRecords.length,
+    salesWritten: totalSalesWritten,
     matched,
     unmatched,
+    backfilledDays,
   }
 }
