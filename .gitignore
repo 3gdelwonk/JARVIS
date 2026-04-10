@@ -25,3 +25,6 @@ project/
 # Lactalis invoice PDFs (real financial documents — never commit)
 Lactalis Invoices/
 *.pdf
+
+# Worker source lives in private JARVIS-worker repo — never commit here
+worker/
